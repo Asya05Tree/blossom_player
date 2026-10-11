@@ -10,3 +10,12 @@ google-api-python-client
 Pillow
 spotapi
 easyocr
+sounddevice
+
+# Shazam-распознавание (core/shazam_util.py) — НЕ ставится просто через requirements.txt:
+# shazamio==0.8.1 жёстко требует shazamio-core==1.1.2, а у той версии нет готового
+# колеса под Python 3.14 (сборка из исходников требует Rust+MSVC и падает).
+# Рабочая установка (колесо для shazamio-core 2.0.0 есть, API совместим):
+#   pip install shazamio-core==2.0.0
+#   pip install shazamio==0.8.1 --no-deps
+#   pip install dataclass_factory "aiofiles>=23.2.1,<24.0.0" "aiohttp-retry>=2.8.3,<3.0.0" "pydub>=0.25.1,<0.26.0" "anyio>=4.3.0"

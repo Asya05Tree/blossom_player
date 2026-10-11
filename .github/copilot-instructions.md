@@ -11,6 +11,8 @@ Short, actionable guidance to help AI coding agents be productive in this repo.
   # fpcalc (Chromaprint) is required for duplicate detection by audio fingerprint -
   # download from https://github.com/acoustid/chromaprint/releases and place at
   # tools/fpcalc/fpcalc.exe (or put fpcalc on PATH). See core/fingerprint_util.py.
+  # shazamio needs a special install order on new Python versions - see the
+  # comment block at the bottom of requirements.txt (core/shazam_util.py).
   ```
 
 - Run the app locally:
