@@ -23,6 +23,7 @@ class Song:
     drive_meta_id: Optional[str] = None
     spotify_track_id: Optional[str] = None # ID трека в Spotify (для дедупликации)
     youtube_video_id: Optional[str] = None # ID видео на YouTube (для дедупликации)
+    fingerprint: Optional[str] = None # Аудио-отпечаток (JSON-массив чисел) для поиска дублей по звуку
 
 @dataclass
 class Playlist:

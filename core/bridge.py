@@ -16,6 +16,9 @@ from .youtube_import_worker import YoutubeImportWorker
 from .artist_import_worker import ArtistImportWorker
 from .youtube_channel_worker import YoutubeChannelWorker
 from .instrumental_worker import InstrumentalWorker
+from .duplicate_finder_worker import DuplicateFinderWorker
+from .blossom_error import BlossomError
+from .trim_util import trim_audio
 from typing import Optional
 from .text_style import strip_decor, wrap_artist, wrap_title
 
@@ -54,6 +57,9 @@ class BlossomBridge(QObject):
     instrumentalProgress = pyqtSignal(str)
     instrumentalFinished = pyqtSignal(str)
     instrumentalFailed = pyqtSignal(str)
+    duplicatesScanProgress = pyqtSignal(str)
+    duplicatesScanFinished = pyqtSignal(str)
+    duplicatesScanFailed = pyqtSignal(str)
 
     def __init__(self, player: BlossomPlayer, drive: BlossomDriveManager):
         super().__init__()
@@ -70,6 +76,7 @@ class BlossomBridge(QObject):
         self._artist_import_worker = None
         self._youtube_channel_worker = None
         self._instrumental_worker = None
+        self._duplicate_finder_worker = None
         db.init_db()
         self.player.player.positionChanged.connect(self._on_position_changed)
         self.player.player.durationChanged.connect(self._on_duration_changed)
@@ -832,6 +839,56 @@ class BlossomBridge(QObject):
         code = err.get("code", "UNKNOWN")
         message = err.get("message", "Не удалось найти инструментал")
         self.instrumentalFailed.emit(f"[{stage}:{code}] {message}")
+
+    @pyqtSlot(int, float, float)
+    def trimSongById(self, song_id, cut_start_seconds, cut_end_seconds):
+        song = db.get_song(song_id)
+        if not song or not song.filepath or not os.path.isfile(song.filepath):
+            self.toastMessage.emit("Файл трека не найден", True)
+            return
+        self.player.stop()
+        try:
+            new_duration = trim_audio(song.filepath, cut_start_seconds, cut_end_seconds)
+        except BlossomError as exc:
+            self.toastMessage.emit(f"Не удалось обрезать: {exc.message}", True)
+            return
+        except Exception as exc:
+            self.toastMessage.emit(f"Не удалось обрезать: {exc}", True)
+            return
+        db.set_song_fingerprint(song_id, None)
+        self._reload_queue_keep(song_id)
+        self._update_ui_state()
+        self.toastMessage.emit(f"Обрезано. Новая длительность: {int(new_duration)} сек", False)
+
+    @pyqtSlot()
+    def findDuplicates(self):
+        if self._duplicate_finder_worker and self._duplicate_finder_worker.isRunning():
+            self.duplicatesScanFailed.emit("Поиск дублей уже выполняется")
+            return
+        self._duplicate_finder_worker = DuplicateFinderWorker()
+        self._duplicate_finder_worker.progress.connect(self.duplicatesScanProgress.emit)
+        self._duplicate_finder_worker.finished_ok.connect(self._on_duplicates_ok)
+        self._duplicate_finder_worker.finished_err.connect(self._on_duplicates_err)
+        self._duplicate_finder_worker.start()
+
+    @pyqtSlot()
+    def stopDuplicateScan(self):
+        if self._duplicate_finder_worker and self._duplicate_finder_worker.isRunning():
+            self._duplicate_finder_worker.request_stop()
+            self.duplicatesScanProgress.emit("Останавливаю…")
+
+    def _on_duplicates_ok(self, groups: list):
+        self.duplicatesScanFinished.emit(json.dumps(groups, ensure_ascii=False))
+
+    def _on_duplicates_err(self, err: dict):
+        stage = err.get("stage", "pipeline")
+        code = err.get("code", "UNKNOWN")
+        message = err.get("message", "Ошибка поиска дублей")
+        detail = (err.get("detail") or "").strip()
+        text = f"[{stage}:{code}] {message}"
+        if detail:
+            text += f" — {detail[:300]}"
+        self.duplicatesScanFailed.emit(text)
 
     @pyqtSlot()
     def importSpotifyLibrary(self):

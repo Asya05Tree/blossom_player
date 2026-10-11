@@ -276,6 +276,29 @@ function wireBridgeSignals() {
         });
     }
 
+    if (pyBridge.duplicatesScanProgress) {
+        pyBridge.duplicatesScanProgress.connect(function(msg) {
+            setDuplicatesStatus(msg, false);
+        });
+    }
+
+    if (pyBridge.duplicatesScanFinished) {
+        pyBridge.duplicatesScanFinished.connect(function(json) {
+            setDuplicatesLock(false);
+            var groups = [];
+            try { groups = JSON.parse(json); } catch (e) { groups = []; }
+            setDuplicatesStatus("Найдено групп дублей: " + groups.length, false, true);
+            renderDuplicateGroups(groups);
+        });
+    }
+
+    if (pyBridge.duplicatesScanFailed) {
+        pyBridge.duplicatesScanFailed.connect(function(msg) {
+            setDuplicatesStatus(msg, true);
+            setDuplicatesLock(false);
+        });
+    }
+
     if (pyBridge.songForEditReady) {
         pyBridge.songForEditReady.connect(function(json) {
             _populateEditModal(json);
@@ -354,6 +377,7 @@ function renderLibrary(json) {
             "<button type='button' data-playlist='" + s.id + "'>Плейлист</button>" +
             "<button type='button' data-edit='" + s.id + "'>Изм.</button>" +
             "<button type='button' data-instr='" + s.id + "' title='Найти инструментал на YouTube'>Инстр.</button>" +
+            "<button type='button' data-trim='" + s.id + "' title='Обрезать начало/конец'>Обрез.</button>" +
             "<button type='button' data-del='" + s.id + "'>Удал.</button>" +
             "</div>";
         list.appendChild(row);
@@ -382,6 +406,9 @@ function renderLibrary(json) {
             btn.disabled = true;
             pyBridge.findInstrumental(parseInt(btn.getAttribute("data-instr")));
         };
+    });
+    list.querySelectorAll("[data-trim]").forEach(function(btn) {
+        btn.onclick = function() { openTrimModal(parseInt(btn.getAttribute("data-trim"))); };
     });
 }
 
@@ -896,6 +923,103 @@ function setYoutubeChannelStatus(text, isError, isOk) {
     if (!el) return;
     el.innerText = text || "";
     el.className = "import-status" + (isError ? " error" : isOk ? " ok" : "");
+}
+
+/* === Trim start/end === */
+
+function openTrimModal(songId) {
+    document.getElementById("trim-song-id").value = songId;
+    document.getElementById("trim-start").value = "0";
+    document.getElementById("trim-end").value = "0";
+    document.getElementById("trim-modal").style.display = "flex";
+}
+
+function closeTrimModal() {
+    document.getElementById("trim-modal").style.display = "none";
+}
+
+function submitTrim() {
+    const songId = parseInt(document.getElementById("trim-song-id").value);
+    const start = parseFloat(document.getElementById("trim-start").value) || 0;
+    const end = parseFloat(document.getElementById("trim-end").value) || 0;
+    if (start <= 0 && end <= 0) {
+        alert("Укажи сколько секунд обрезать с начала и/или с конца");
+        return;
+    }
+    pyBridge.trimSongById(songId, start, end);
+    closeTrimModal();
+}
+
+/* === Duplicate finder (by audio fingerprint) === */
+
+var duplicatesScanRunning = false;
+
+function openDuplicatesModal() {
+    document.getElementById("duplicates-modal").style.display = "flex";
+}
+
+function closeDuplicatesModal() {
+    document.getElementById("duplicates-modal").style.display = "none";
+}
+
+function setDuplicatesStatus(text, isError, isOk) {
+    var el = document.getElementById("duplicates-status");
+    if (!el) return;
+    el.innerText = text || "";
+    el.className = "import-status" + (isError ? " error" : isOk ? " ok" : "");
+}
+
+function setDuplicatesLock(locked) {
+    duplicatesScanRunning = locked;
+    var startBtn = document.getElementById("btn-duplicates-scan");
+    var stopBtn = document.getElementById("btn-duplicates-stop");
+    if (startBtn) startBtn.disabled = locked;
+    if (stopBtn) stopBtn.disabled = !locked;
+}
+
+function startDuplicatesScan() {
+    if (!pyBridge || !pyBridge.findDuplicates) return;
+    if (duplicatesScanRunning) return;
+    document.getElementById("duplicates-list").innerHTML = "";
+    setDuplicatesStatus("Запускаю поиск…");
+    setDuplicatesLock(true);
+    pyBridge.findDuplicates();
+}
+
+function stopDuplicatesScan() {
+    if (pyBridge && pyBridge.stopDuplicateScan) pyBridge.stopDuplicateScan();
+}
+
+function renderDuplicateGroups(groups) {
+    var list = document.getElementById("duplicates-list");
+    list.innerHTML = "";
+    if (!groups.length) {
+        list.innerHTML = "<p style='font-size:12px;color:#9a86a4'>Дублей не найдено.</p>";
+        return;
+    }
+    groups.forEach(function(group, gIndex) {
+        var block = document.createElement("div");
+        block.className = "duplicate-group";
+        block.setAttribute("data-group", gIndex);
+        var html = "<div style='font-size:12px;color:#9a86a4;margin:6px 0 2px'>Похожие треки:</div>";
+        group.songs.forEach(function(s) {
+            html += "<div class='duplicate-row' data-song-row='" + s.id + "'>" +
+                "<span>" + escapeHtml(s.artist_raw || s.artist) + " — " + escapeHtml(s.title_raw || s.title) + "</span>" +
+                "<button type='button' data-dup-del='" + s.id + "'>Удалить</button>" +
+                "</div>";
+        });
+        block.innerHTML = html;
+        list.appendChild(block);
+    });
+    list.querySelectorAll("[data-dup-del]").forEach(function(btn) {
+        btn.onclick = function() {
+            var id = parseInt(btn.getAttribute("data-dup-del"));
+            if (!confirm("Удалить этот трек?")) return;
+            pyBridge.deleteSongById(id);
+            var row = list.querySelector("[data-song-row='" + id + "']");
+            if (row) row.remove();
+        };
+    });
 }
 
 /* === Playlist Modal === */

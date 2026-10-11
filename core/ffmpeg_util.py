@@ -35,3 +35,17 @@ def resolve_ffmpeg() -> str:
         "FFMPEG_MISSING",
         "ffmpeg не найден. Добавь в PATH или укажи путь в config/app_settings.json",
     )
+
+
+def resolve_ffprobe() -> str:
+    ffmpeg_path = resolve_ffmpeg()
+    sibling = os.path.join(os.path.dirname(ffmpeg_path), "ffprobe.exe")
+    if os.path.isfile(sibling):
+        return sibling
+    sibling_nix = os.path.join(os.path.dirname(ffmpeg_path), "ffprobe")
+    if os.path.isfile(sibling_nix):
+        return sibling_nix
+    from_path = shutil.which("ffprobe")
+    if from_path:
+        return from_path
+    fail(Stage.FILE_IO, "FFPROBE_MISSING", "ffprobe не найден рядом с ffmpeg и не в PATH")

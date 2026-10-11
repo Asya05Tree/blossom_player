@@ -14,11 +14,13 @@ assets/
 testsong/
 *.db
 
-# Third-party redistributable binaries (VLC, ffmpeg) — not our code
+# Third-party redistributable binaries (VLC, ffmpeg, fpcalc) — not our code
 plugins/
 ffmpeg/
+tools/
 libvlc.dll
 *.dll
+*.exe
 
 # Background videos (large binaries, not code)
 video_backgrounds/

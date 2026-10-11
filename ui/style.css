@@ -880,6 +880,26 @@ body {
     overflow-y: auto;
 }
 
+.duplicate-group {
+    border: 1px solid #e6d9f0;
+    border-radius: 10px;
+    padding: 6px 8px;
+    margin-bottom: 8px;
+}
+
+.duplicate-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 4px 0;
+    font-size: 12px;
+}
+
+.duplicate-row button {
+    flex-shrink: 0;
+}
+
 .pv-song-row {
     display: flex;
     align-items: center;

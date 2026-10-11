@@ -29,7 +29,8 @@ def init_db():
             drive_lyrics_id TEXT,
             drive_meta_id TEXT,
             spotify_track_id TEXT,
-            youtube_video_id TEXT
+            youtube_video_id TEXT,
+            fingerprint TEXT
         )
     ''')
     # Add columns if upgrading from old schema
@@ -51,6 +52,10 @@ def init_db():
         pass
     try:
         cursor.execute("ALTER TABLE songs ADD COLUMN youtube_video_id TEXT")
+    except Exception:
+        pass
+    try:
+        cursor.execute("ALTER TABLE songs ADD COLUMN fingerprint TEXT")
     except Exception:
         pass
     cursor.execute('''
@@ -76,11 +81,11 @@ def add_song(song: Song) -> int:
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute('''
-        INSERT INTO songs (title, artist, filepath, cover_path, lyrics, video_link, drive_file_id, drive_cover_id, drive_lyrics_id, drive_meta_id, spotify_track_id, youtube_video_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO songs (title, artist, filepath, cover_path, lyrics, video_link, drive_file_id, drive_cover_id, drive_lyrics_id, drive_meta_id, spotify_track_id, youtube_video_id, fingerprint)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ''', (song.title, song.artist, song.filepath, song.cover_path, song.lyrics, song.video_link,
           song.drive_file_id, song.drive_cover_id, song.drive_lyrics_id, song.drive_meta_id,
-          song.spotify_track_id, song.youtube_video_id))
+          song.spotify_track_id, song.youtube_video_id, song.fingerprint))
     conn.commit()
     song_id = cursor.lastrowid
     conn.close()
@@ -102,6 +107,7 @@ def _row_to_song(row) -> Song:
         drive_meta_id=_get("drive_meta_id"),
         spotify_track_id=_get("spotify_track_id"),
         youtube_video_id=_get("youtube_video_id"),
+        fingerprint=_get("fingerprint"),
     )
 
 
@@ -172,6 +178,24 @@ def set_song_youtube_id(song_id: int, youtube_video_id: str) -> None:
     )
     conn.commit()
     conn.close()
+
+
+def set_song_fingerprint(song_id: int, fingerprint: str) -> None:
+    conn = get_connection()
+    conn.cursor().execute(
+        'UPDATE songs SET fingerprint = ? WHERE id = ?',
+        (fingerprint, song_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_songs_missing_fingerprint() -> List[Song]:
+    """Песни с существующим локальным файлом, но без аудио-отпечатка."""
+    return [
+        s for s in get_all_songs()
+        if not s.fingerprint and s.filepath and os.path.isfile(s.filepath)
+    ]
 
 
 def get_playlist_by_name(name: str) -> Optional[Playlist]:

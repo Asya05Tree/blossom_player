@@ -8,6 +8,9 @@ Short, actionable guidance to help AI coding agents be productive in this repo.
   ```bash
   pip install PyQt6 mutagen yt-dlp spotdl
   # ffmpeg is required by yt-dlp/spotdl - install via system package manager
+  # fpcalc (Chromaprint) is required for duplicate detection by audio fingerprint -
+  # download from https://github.com/acoustid/chromaprint/releases and place at
+  # tools/fpcalc/fpcalc.exe (or put fpcalc on PATH). See core/fingerprint_util.py.
   ```
 
 - Run the app locally:
