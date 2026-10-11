@@ -1,0 +1,752 @@
+import json
+import os
+from PyQt6.QtCore import QObject, pyqtSlot, pyqtSignal
+from PyQt6.QtWidgets import QApplication, QFileDialog
+from .models import Song, Playlist
+from . import database as db
+from .player import BlossomPlayer
+from .covers import save_and_resize_cover
+from .drive import BlossomDriveManager
+from .drive_login_worker import DriveLoginWorker, DriveVerifyWorker
+from .drive_upload_worker import DriveUploadWorker
+from .drive_sync_worker import DriveSyncWorker, DriveDownloadWorker
+from .spotify_import_worker import SpotifyImportWorker
+from .spotify_library_worker import SpotifyLibraryWorker
+from typing import Optional
+from .text_style import wrap_artist, wrap_title
+
+DEFAULT_LYRICS = "Текст песни пока не добавлен."
+
+
+class BlossomBridge(QObject):
+    songChanged = pyqtSignal(str, str, str, str, str, str, bool, bool)
+    nextSongPreview = pyqtSignal(str)
+    playlistListUpdated = pyqtSignal(list)
+    importStarted = pyqtSignal(str)
+    importFinished = pyqtSignal(str)
+    importFailed = pyqtSignal(str, str, str)
+    driveStatusChanged = pyqtSignal(str)
+    driveLoginFailed = pyqtSignal(str, str, str)
+    libraryUpdated = pyqtSignal(str)
+    filePicked = pyqtSignal(str, str)
+    toastMessage = pyqtSignal(str, bool)
+    songForEditReady = pyqtSignal(str)
+    positionChanged = pyqtSignal(int, int)
+    importProgress = pyqtSignal(str)
+    spotifyAutoProgress = pyqtSignal(str)
+    spotifyAutoFinished = pyqtSignal(str)
+    spotifyAutoFailed = pyqtSignal(str)
+
+    def __init__(self, player: BlossomPlayer, drive: BlossomDriveManager):
+        super().__init__()
+        self.player = player
+        self.drive = drive
+        self._import_worker = None
+        self._drive_login_worker = None
+        self._drive_upload_worker = None
+        self._drive_verify_worker = None
+        self._spotify_library_worker = None
+        self._spotify_login_dialog = None
+        self._spotify_relogin_done = False
+        db.init_db()
+        self.player.player.positionChanged.connect(self._on_position_changed)
+        self.player.player.durationChanged.connect(self._on_duration_changed)
+        self.player.player.mediaStatusChanged.connect(self._on_media_status_changed)
+        self._last_duration = 0
+
+    def _on_position_changed(self, position: int):
+        self.positionChanged.emit(position, self._last_duration)
+
+    def _on_duration_changed(self, duration: int):
+        self._last_duration = duration
+        self.positionChanged.emit(0, duration)
+
+    def _on_media_status_changed(self, status):
+        from PyQt6.QtMultimedia import QMediaPlayer
+        if status == QMediaPlayer.MediaStatus.EndOfMedia:
+            if self.player.loop_mode == "repeat_one":
+                self.player.play()
+                self._update_ui_state()
+            elif self.player.next():
+                self._update_ui_state()
+
+    def _window(self):
+        return QApplication.activeWindow()
+
+    def _emit_drive_status(self):
+        self.driveStatusChanged.emit(json.dumps(self.drive.status_snapshot(), ensure_ascii=False))
+
+    def _strip_decor(self, text: str) -> str:
+        value = (text or "").strip()
+        for token in ("✧ ", " ✧", "❀ ", " ❀"):
+            value = value.replace(token, "")
+        return value.strip()
+
+    def _cover_file_url(self, cover_path: str) -> str:
+        if not cover_path or not os.path.isfile(cover_path):
+            return ""
+        return "file:///" + os.path.abspath(cover_path).replace("\\", "/")
+
+    def _emit_library(self):
+        items = []
+        for song in db.get_all_songs():
+            items.append({
+                "id": song.id,
+                "title": song.title,
+                "artist": song.artist,
+                "title_raw": self._strip_decor(song.title),
+                "artist_raw": self._strip_decor(song.artist),
+                "cover": self._cover_file_url(song.cover_path or ""),
+                "filepath": song.filepath,
+            })
+        self.libraryUpdated.emit(json.dumps(items, ensure_ascii=False))
+
+    def _reload_queue_keep(self, song_id: Optional[int] = None):
+        all_songs = db.get_all_songs()
+        if not all_songs:
+            self.player.load_queue([], 0)
+            return
+        index = 0
+        if song_id is not None:
+            index = next((i for i, s in enumerate(all_songs) if s.id == song_id), 0)
+        elif self.player.get_current_song():
+            cur = self.player.get_current_song()
+            index = next((i for i, s in enumerate(all_songs) if s.id == cur.id), 0)
+        self.player.load_queue(all_songs, start_index=index)
+
+    def _update_ui_state(self):
+        song = self.player.get_current_song()
+        if not song:
+            self.songChanged.emit(
+                "Выбери трек",
+                "Библиотека пуста или на паузе",
+                "",
+                DEFAULT_LYRICS,
+                "",
+                "Моя коллекция",
+                False,
+                False,
+            )
+            return
+
+        video_source = song.video_link.strip() if (song.video_link and song.video_link.endswith(".mp4")) else ""
+
+        has_prev = self.player.current_index > 0
+        has_next = self.player.current_index < len(self.player.queue) - 1
+        if self.player.loop_mode == "repeat_all":
+            has_prev = has_next = True
+
+        cover_url = self._cover_file_url(song.cover_path or "")
+
+        next_song = self.player.get_next_song()
+        next_text = next_song.title if next_song else "Конец очереди"
+        self.nextSongPreview.emit(f"Далее: {next_text}")
+
+        self.songChanged.emit(
+            song.title,
+            song.artist,
+            cover_url,
+            song.lyrics or DEFAULT_LYRICS,
+            video_source,
+            "Моя коллекция",
+            has_prev,
+            has_next,
+        )
+
+    @pyqtSlot(result=str)
+    def getDriveStatus(self) -> str:
+        if self.drive.service and not self.drive.user_email:
+            try:
+                self.drive.user_email = self.drive._fetch_user_email()
+            except Exception:
+                pass
+        return json.dumps(self.drive.status_snapshot(), ensure_ascii=False)
+
+    @pyqtSlot()
+    def emitDriveStatus(self):
+        """Emit driveStatusChanged signal so JS can react asynchronously."""
+        if self.drive.service and not self.drive.user_email:
+            try:
+                self.drive.user_email = self.drive._fetch_user_email()
+            except Exception:
+                pass
+        self._emit_drive_status()
+
+    @pyqtSlot()
+    def checkDriveAccess(self):
+        """Тихая проверка реального доступа к Google Drive (без браузера).
+
+        Наличие token.json не означает доступ — токен может быть отозван,
+        поэтому проверяем настоящим вызовом Drive API в фоне.
+        """
+        if self.drive.service:
+            self._emit_drive_status()
+            return
+        if self._drive_verify_worker and self._drive_verify_worker.isRunning():
+            return
+        self._drive_verify_worker = DriveVerifyWorker(self.drive)
+        self._drive_verify_worker.finished_status.connect(self.driveStatusChanged.emit)
+        self._drive_verify_worker.start()
+
+    @pyqtSlot(bool)
+    def loginGoogleDrive(self, pick_account: bool):
+        if self._drive_login_worker and self._drive_login_worker.isRunning():
+            self.driveLoginFailed.emit("drive_auth", "LOGIN_BUSY", "Вход уже выполняется")
+            return
+        self._drive_login_worker = DriveLoginWorker(self.drive, pick_account=bool(pick_account))
+        self._drive_login_worker.finished_ok.connect(self._on_drive_login_ok)
+        self._drive_login_worker.finished_err.connect(self._on_drive_login_err)
+        self._drive_login_worker.start()
+
+    def _on_drive_login_ok(self, status_json: str):
+        self.driveStatusChanged.emit(status_json)
+
+    def _on_drive_login_err(self, stage: str, code: str, message: str):
+        self.driveLoginFailed.emit(stage, code, message)
+
+    @pyqtSlot()
+    def logoutGoogleDrive(self):
+        self.drive.logout()
+        self._emit_drive_status()
+
+    @pyqtSlot(str)
+    def pickFile(self, kind: str):
+        parent = self._window()
+        path = ""
+        if kind == "audio":
+            path, _ = QFileDialog.getOpenFileName(
+                parent, "Выбери аудиофайл", "", "Audio (*.mp3 *.m4a *.flac *.wav *.ogg)",
+            )
+        elif kind in ("cover", "cover_local", "cover_edit"):
+            path, _ = QFileDialog.getOpenFileName(
+                parent, "Выбери обложку", "", "Images (*.png *.jpg *.jpeg *.webp *.bmp)",
+            )
+        elif kind == "video_bg":
+            path, _ = QFileDialog.getOpenFileName(
+                parent, "Выбери видео для фона", "", "Video (*.webm *.mp4)",
+            )
+        if path:
+            self.filePicked.emit(path, kind)
+            self.toastMessage.emit(f"Выбрано: {os.path.basename(path)}", False)
+
+    @pyqtSlot(result=str)
+    def getLibraryJson(self) -> str:
+        self._emit_library()
+        return "ok"
+
+    @pyqtSlot(int)
+    def playSongById(self, song_id: int):
+        all_songs = db.get_all_songs()
+        idx = next((i for i, s in enumerate(all_songs) if s.id == song_id), -1)
+        if idx < 0:
+            self.toastMessage.emit("Трек не найден", True)
+            return
+        song = all_songs[idx]
+        if not self._ensure_local_file(song):
+            self.toastMessage.emit("Файл не найден и нет Drive ID для скачивания", True)
+            return
+        self.player.load_queue(all_songs, start_index=idx)
+        self.player.play()
+        self._update_ui_state()
+
+    @pyqtSlot(int)
+    def deleteSongById(self, song_id: int):
+        song = db.get_song(song_id)
+        if not song:
+            self.toastMessage.emit("Трек не найден", True)
+            return
+        # Delete from Drive
+        if self.drive.service:
+            for fid in [song.drive_file_id, song.drive_cover_id, song.drive_lyrics_id, song.drive_meta_id]:
+                if fid:
+                    try:
+                        self.drive.delete_file(fid)
+                    except Exception:
+                        pass
+        if not db.delete_song(song_id):
+            self.toastMessage.emit("Не удалось удалить", True)
+            return
+        self._reload_queue_keep()
+        self._update_ui_state()
+        self._emit_library()
+        self.toastMessage.emit("Трек удалён", False)
+
+    @pyqtSlot(int, str, str, str, str)
+    def updateSongById(self, song_id: int, title, artist, lyrics, cover_source):
+        song = db.get_song(song_id)
+        if not song:
+            self.toastMessage.emit("Трек не найден", True)
+            return
+        raw_title = (title or self._strip_decor(song.title)).strip()
+        raw_artist = (artist or self._strip_decor(song.artist)).strip()
+        if not raw_title:
+            self.toastMessage.emit("Название не может быть пустым", True)
+            return
+        cover_path = song.cover_path
+        cover_seed = (cover_source or "").strip()
+        if cover_seed and os.path.isfile(cover_seed):
+            cover_path = save_and_resize_cover(cover_seed, song_id)
+        final_lyrics = (lyrics or "").strip() or DEFAULT_LYRICS
+        db.update_song_row(
+            song_id,
+            wrap_title(raw_title),
+            wrap_artist(raw_artist),
+            final_lyrics,
+            cover_path,
+        )
+        # Update meta on Drive
+        if self.drive.service and song.drive_meta_id:
+            try:
+                import re
+                stem = re.sub(r'[<>:"/\\|?*]+', "", f"{raw_artist}_{raw_title}")
+                stem = re.sub(r"\s+", "_", stem).strip("._")[:120] or "track"
+                meta = {
+                    "title": raw_title,
+                    "artist": raw_artist,
+                    "lyrics": final_lyrics,
+                    "audio_file_id": song.drive_file_id or "",
+                    "cover_file_id": song.drive_cover_id or "",
+                    "lyrics_file_id": song.drive_lyrics_id or "",
+                }
+                from .paths import TEMP_DIR
+                os.makedirs(TEMP_DIR, exist_ok=True)
+                local_meta = os.path.join(TEMP_DIR, f"{stem}.json")
+                with open(local_meta, "w", encoding="utf-8") as fh:
+                    json.dump(meta, fh, ensure_ascii=False, indent=2)
+                self.drive.update_file(song.drive_meta_id, local_meta)
+            except Exception:
+                pass
+        self._reload_queue_keep(song_id)
+        self._update_ui_state()
+        self._emit_library()
+        self.toastMessage.emit("Сохранено", False)
+
+    @pyqtSlot(int, result=str)
+    def getSongForEdit(self, song_id: int) -> str:
+        song = db.get_song(song_id)
+        if not song:
+            return "{}"
+        return json.dumps({
+            "id": song.id,
+            "title": self._strip_decor(song.title),
+            "artist": self._strip_decor(song.artist),
+            "lyrics": song.lyrics or "",
+            "cover": self._cover_file_url(song.cover_path or ""),
+        }, ensure_ascii=False)
+
+    @pyqtSlot(int)
+    def requestSongForEdit(self, song_id: int):
+        song = db.get_song(song_id)
+        if not song:
+            self.songForEditReady.emit("{}")
+            return
+        self.songForEditReady.emit(json.dumps({
+            "id": song.id,
+            "title": self._strip_decor(song.title),
+            "artist": self._strip_decor(song.artist),
+            "lyrics": song.lyrics or "",
+            "cover": self._cover_file_url(song.cover_path or ""),
+        }, ensure_ascii=False))
+
+    @pyqtSlot(int)
+    def seekTo(self, position_ms: int):
+        self.player.player.setPosition(position_ms)
+
+    @pyqtSlot(str)
+    def createPlaylist(self, name: str):
+        raw = (name or "").strip()
+        if not raw:
+            self.toastMessage.emit("Введи название плейлиста", True)
+            return
+        from .text_style import wrap_title as wt
+        try:
+            display = wt(raw)
+        except Exception:
+            display = raw
+        db.add_playlist(Playlist(name=display))
+        self._emit_playlists()
+        self.toastMessage.emit("Плейлист создан", False)
+
+    def _emit_playlists(self):
+        items = [{"id": p.id, "name": p.name} for p in db.get_all_playlists()]
+        self.playlistListUpdated.emit(items)
+
+    @pyqtSlot(int, int)
+    def addSongToPlaylist(self, playlist_id: int, song_id: int):
+        db.add_song_to_playlist(playlist_id, song_id)
+        self.toastMessage.emit("Добавлено в плейлист", False)
+
+    @pyqtSlot(int)
+    def deletePlaylistById(self, playlist_id: int):
+        if db.delete_playlist(playlist_id):
+            self._emit_playlists()
+            self.toastMessage.emit("Плейлист удалён", False)
+
+    @pyqtSlot(int, result=str)
+    def getPlaylistSongsJson(self, playlist_id: int) -> str:
+        songs = db.get_playlist_songs(playlist_id)
+        items = []
+        for song in songs:
+            items.append({
+                "id": song.id,
+                "title": song.title,
+                "artist": song.artist,
+                "title_raw": self._strip_decor(song.title),
+                "artist_raw": self._strip_decor(song.artist),
+                "cover": self._cover_file_url(song.cover_path or ""),
+                "filepath": song.filepath,
+            })
+        return json.dumps(items, ensure_ascii=False)
+
+    @pyqtSlot(int, result=str)
+    def getPlaylistsForSongJson(self, song_id: int) -> str:
+        all_playlists = db.get_all_playlists()
+        song_pl_ids = db.get_song_playlist_ids(song_id)
+        items = []
+        for p in all_playlists:
+            items.append({
+                "id": p.id,
+                "name": p.name,
+                "has_song": p.id in song_pl_ids,
+            })
+        return json.dumps(items, ensure_ascii=False)
+
+    @pyqtSlot(int, int)
+    def removeSongFromPlaylist(self, playlist_id: int, song_id: int):
+        if db.remove_song_from_playlist(playlist_id, song_id):
+            self.toastMessage.emit("Убрано из плейлиста", False)
+
+    @pyqtSlot(int, str)
+    def renamePlaylist(self, playlist_id: int, new_name: str):
+        raw = (new_name or "").strip()
+        if not raw:
+            self.toastMessage.emit("Введи название", True)
+            return
+        from .text_style import wrap_title as wt
+        try:
+            display = wt(raw)
+        except Exception:
+            display = raw
+        if db.rename_playlist(playlist_id, display):
+            self._emit_playlists()
+            self.toastMessage.emit("Переименовано", False)
+
+    @pyqtSlot(int)
+    def playPlaylist(self, playlist_id: int):
+        songs = db.get_playlist_songs(playlist_id)
+        if not songs:
+            self.toastMessage.emit("Плейлист пуст", True)
+            return
+        self.player.load_queue(songs, start_index=0)
+        self.player.play()
+        self._update_ui_state()
+
+    @pyqtSlot()
+    def syncFromDrive(self):
+        if not self.drive.service and not os.path.exists(self.drive._token_file()):
+            self.toastMessage.emit("Сначала войди в Google Drive", True)
+            return
+        self._sync_worker = DriveSyncWorker(self.drive)
+        self._sync_worker.finished_ok.connect(self._on_sync_ok)
+        self._sync_worker.finished_err.connect(
+            lambda e: self.toastMessage.emit(f"Ошибка синхронизации: {e}", True)
+        )
+        self.toastMessage.emit("Синхронизация с Drive...", False)
+        self._sync_worker.start()
+
+    def _on_sync_ok(self, count: int):
+        if count > 0:
+            self._reload_queue_keep()
+            self._update_ui_state()
+            self._emit_library()
+        self._emit_playlists()
+        self.toastMessage.emit(f"Синхронизировано: {count} новых треков", False)
+
+    def _ensure_local_file(self, song):
+        """If song file doesn't exist locally but has drive_file_id, download it."""
+        if song.filepath and os.path.isfile(song.filepath):
+            return True
+        if not song.drive_file_id:
+            return False
+        from .paths import DOWNLOADS_DIR
+        local_path = os.path.join(DOWNLOADS_DIR, os.path.basename(song.filepath or f"song_{song.id}.mp3"))
+        if os.path.isfile(local_path):
+            if local_path != song.filepath:
+                conn = db.get_connection()
+                conn.cursor().execute("UPDATE songs SET filepath = ? WHERE id = ?", (local_path, song.id))
+                conn.commit()
+                conn.close()
+                song.filepath = local_path
+            return True
+        # Need to download - do it synchronously for now
+        try:
+            if not self.drive.service:
+                self.drive.login()
+            os.makedirs(DOWNLOADS_DIR, exist_ok=True)
+            self.drive.download_file(song.drive_file_id, local_path)
+            conn = db.get_connection()
+            conn.cursor().execute("UPDATE songs SET filepath = ? WHERE id = ?", (local_path, song.id))
+            conn.commit()
+            conn.close()
+            song.filepath = local_path
+            return True
+        except Exception as exc:
+            self.toastMessage.emit(f"Не удалось скачать из Drive: {exc}", True)
+            return False
+
+    @pyqtSlot()
+    def play(self):
+        song = self.player.get_current_song()
+        if not song:
+            return
+        if self.player.is_paused:
+            self.player.resume()
+        else:
+            if not self._ensure_local_file(song):
+                self.toastMessage.emit("Файл не найден", True)
+                return
+            self.player.play()
+        self._update_ui_state()
+
+    @pyqtSlot()
+    def pause(self):
+        self.player.pause()
+
+    @pyqtSlot()
+    def stop(self):
+        self.player.stop()
+
+    @pyqtSlot()
+    def restart(self):
+        self.player.restart()
+        self._update_ui_state()
+
+    @pyqtSlot()
+    def next(self):
+        if self.player.next():
+            self._update_ui_state()
+
+    @pyqtSlot()
+    def prev(self):
+        if self.player.prev():
+            self._update_ui_state()
+
+    @pyqtSlot(float)
+    def setVolume(self, val):
+        self.player.set_volume(val / 100.0)
+
+    @pyqtSlot(str)
+    def setLoopMode(self, mode):
+        self.player.set_loop_mode(mode)
+        self._update_ui_state()
+
+    @pyqtSlot()
+    def toggleShuffle(self):
+        self.player.toggle_shuffle()
+        self._update_ui_state()
+
+    @pyqtSlot(str, str, str, str, str)
+    def addSongFull(self, title, artist, filepath, lyrics, cover_source):
+        filepath = (filepath or "").strip()
+        if not filepath or not os.path.isfile(filepath):
+            self.toastMessage.emit("Файл не найден — выбери снова", True)
+            return
+        raw_title = (title or os.path.splitext(os.path.basename(filepath))[0]).strip()
+        raw_artist = (artist or "Unknown Artist").strip()
+        try:
+            song = Song(
+                title=wrap_title(raw_title),
+                artist=wrap_artist(raw_artist),
+                filepath=filepath,
+                lyrics=(lyrics or "").strip() or DEFAULT_LYRICS,
+                video_link="",
+            )
+        except Exception as exc:
+            self.toastMessage.emit(str(exc), True)
+            return
+        song_id = db.add_song(song)
+        seed = (cover_source or "").strip()
+        final_cover = save_and_resize_cover(seed, song_id)
+        conn = db.get_connection()
+        conn.cursor().execute("UPDATE songs SET cover_path = ? WHERE id = ?", (final_cover, song_id))
+        conn.commit()
+        conn.close()
+        self._reload_queue_keep(song_id)
+        self._update_ui_state()
+        self._emit_library()
+        self.toastMessage.emit("Трек добавлен", False)
+        self._try_upload_to_drive(filepath, raw_title, raw_artist, final_cover, (lyrics or "").strip(), song_id)
+
+    def _try_upload_to_drive(self, filepath, title, artist, cover_path, lyrics, song_id=0):
+        if not self.drive.service and not os.path.exists(self.drive._token_file()):
+            return
+        self._drive_upload_worker = DriveUploadWorker(
+            drive=self.drive,
+            filepath=filepath,
+            title=title,
+            artist=artist,
+            cover_path=cover_path or "",
+            lyrics=lyrics or "",
+            song_id=song_id,
+        )
+        self._drive_upload_worker.finished_ok.connect(
+            lambda t: self.toastMessage.emit(f"Загружено в Drive: {t}", False)
+        )
+        self._drive_upload_worker.finished_err.connect(
+            lambda e: self.toastMessage.emit(f"Ошибка Drive: {e}", True)
+        )
+        self._drive_upload_worker.start()
+
+    @pyqtSlot(str, str, str, bool)
+    def importFromSpotify(self, url, lyrics, cover_source, upload_to_drive):
+        if self._import_worker and self._import_worker.isRunning():
+            self.importFailed.emit("pipeline", "IMPORT_BUSY", "Импорт уже выполняется")
+            return
+        if upload_to_drive and self.drive.service is None and not os.path.exists(self.drive._token_file()):
+            self.importFailed.emit(
+                "drive_auth",
+                "DRIVE_NOT_LOGGED_IN",
+                "Сначала войди в Google Drive. Gmail должна быть в Test users в Google Cloud.",
+            )
+            return
+        # Stop playback during import
+        self.player.stop()
+        self.importStarted.emit(url)
+        self._import_worker = SpotifyImportWorker(
+            track_url=url,
+            drive=self.drive,
+            lyrics=lyrics or "",
+            cover_source=cover_source or "",
+            video_link="",
+            upload_to_drive=bool(upload_to_drive),
+            save_to_db=True,
+        )
+        self._import_worker.finished_ok.connect(self._on_import_ok)
+        self._import_worker.finished_err.connect(self._on_import_err)
+        self._import_worker.progress.connect(lambda msg: self.importProgress.emit(msg))
+        self._import_worker.start()
+
+    def _on_import_ok(self, payload):
+        all_songs = db.get_all_songs()
+        if payload.get("song_id"):
+            idx = next(
+                (i for i, s in enumerate(all_songs) if s.id == payload["song_id"]),
+                len(all_songs) - 1,
+            )
+            self.player.load_queue(all_songs, max(0, idx))
+            self._update_ui_state()
+        title = payload.get("title_display") or payload.get("title") or "track"
+        if payload.get("duplicate"):
+            title = f"{title} (уже была в библиотеке)"
+        self._emit_library()
+        self.importFinished.emit(title)
+
+    def _on_import_err(self, err):
+        stage = err.get("stage", "pipeline")
+        code = err.get("code", "UNKNOWN")
+        message = err.get("message", "Ошибка импорта")
+        self.importFailed.emit(stage, code, message)
+
+    @pyqtSlot()
+    def importSpotifyLibrary(self):
+        """«Спотифай автоматически»: вход в Spotify и импорт всех плейлистов."""
+        if self._spotify_library_worker and self._spotify_library_worker.isRunning():
+            self.spotifyAutoProgress.emit("Импорт уже выполняется…")
+            return
+        if self._import_worker and self._import_worker.isRunning():
+            self.spotifyAutoFailed.emit("Дождись окончания текущего импорта трека")
+            return
+        from .spotify_web_service import get_saved_sp_dc
+        self._spotify_relogin_done = False
+        if not get_saved_sp_dc():
+            self._open_spotify_web_login()
+            return
+        self._start_spotify_library_worker()
+
+    def _open_spotify_web_login(self):
+        from .spotify_web_login import SpotifyWebLoginDialog
+        self.spotifyAutoProgress.emit("Открываю окно входа в Spotify…")
+        dialog = SpotifyWebLoginDialog(self._window())
+        self._spotify_login_dialog = dialog
+        dialog.sp_dc_captured.connect(lambda _v: self._start_spotify_library_worker())
+        dialog.rejected.connect(lambda: self.spotifyAutoFailed.emit("Вход в Spotify отменён"))
+        dialog.show()
+
+    def _start_spotify_library_worker(self):
+        if self._spotify_library_worker and self._spotify_library_worker.isRunning():
+            return
+        self.player.stop()
+        self._spotify_library_worker = SpotifyLibraryWorker(self.drive)
+        self._spotify_library_worker.progress.connect(self.spotifyAutoProgress.emit)
+        self._spotify_library_worker.finished_ok.connect(self._on_spotify_library_ok)
+        self._spotify_library_worker.finished_err.connect(self._on_spotify_library_err)
+        self._spotify_library_worker.start()
+
+    @pyqtSlot()
+    def stopSpotifyLibraryImport(self):
+        if self._spotify_library_worker and self._spotify_library_worker.isRunning():
+            self._spotify_library_worker.request_stop()
+            self.spotifyAutoProgress.emit("Останавливаю после текущего трека…")
+
+    def _on_spotify_library_ok(self, stats: dict):
+        self._reload_queue_keep()
+        self._update_ui_state()
+        self._emit_library()
+        self._emit_playlists()
+        text = (
+            f"Готово! Новых треков: {stats.get('imported', 0)}, "
+            f"дублей пропущено: {stats.get('skipped', 0)}, "
+            f"ошибок: {stats.get('failed', 0)}, "
+            f"плейлистов: {stats.get('playlists', 0)}"
+        )
+        if stats.get("stopped"):
+            text = "Импорт остановлен. " + text
+        self.spotifyAutoFinished.emit(text)
+        self.toastMessage.emit(text, False)
+
+    def _on_spotify_library_err(self, err: dict):
+        stage = err.get("stage", "pipeline")
+        code = err.get("code", "UNKNOWN")
+        message = err.get("message", "Ошибка импорта Spotify")
+        detail = (err.get("detail") or "").strip()
+        # Сессия Spotify истекла — предложить вход заново (один раз, без цикла)
+        if code in ("SPOTIFY_WEB_SESSION_EXPIRED", "SPOTIFY_WEB_LOGIN_REQUIRED"):
+            from .spotify_web_service import clear_sp_dc
+            if not getattr(self, "_spotify_relogin_done", False):
+                self._spotify_relogin_done = True
+                clear_sp_dc()
+                self._open_spotify_web_login()
+                return
+        text = f"[{stage}:{code}] {message}"
+        if detail:
+            text += f" — {detail[:300]}"
+        self.spotifyAutoFailed.emit(text)
+
+    @pyqtSlot()
+    def add_new_song_dialog(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self._window(),
+            "Выбери трек",
+            "",
+            "Audio (*.mp3 *.m4a *.flac *.wav)",
+        )
+        if not path:
+            return
+        title = os.path.splitext(os.path.basename(path))[0]
+        new_song = Song(
+            title=wrap_title(title),
+            artist=wrap_artist("Unknown Artist"),
+            filepath=path,
+            lyrics=DEFAULT_LYRICS,
+            video_link="",
+        )
+        song_id = db.add_song(new_song)
+        cover_path = save_and_resize_cover("", song_id)
+        conn = db.get_connection()
+        conn.cursor().execute("UPDATE songs SET cover_path = ? WHERE id = ?", (cover_path, song_id))
+        conn.commit()
+        conn.close()
+        self._reload_queue_keep(song_id)
+        self._update_ui_state()
+        self._emit_library()
+        self.toastMessage.emit("Трек добавлен", False)

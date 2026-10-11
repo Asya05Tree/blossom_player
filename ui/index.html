@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Blossom Player</title>
+    <script type="text/javascript" src="qrc:///qtwebchannel/qwebchannel.js"></script>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div id="drive-login-overlay" class="drive-login-overlay">
+    <div class="drive-login-card">
+        <h1 class="drive-login-title">Blossom Player</h1>
+        <p id="drive-login-sub" class="drive-login-sub">Проверяю доступ к Google Drive…</p>
+        <p id="drive-login-status" class="drive-login-status"></p>
+        <div id="drive-login-actions" style="display:none">
+            <button type="button" class="btn-modal btn-primary drive-login-btn" onclick="loginDrive(false)">Войти в Google Drive</button>
+            <button type="button" class="btn-modal btn-ghost drive-login-btn" onclick="loginDrive(true)" style="margin-top:8px">Сменить аккаунт</button>
+            <p class="hint-text" style="margin-top:12px;text-align:center">Google Cloud → OAuth consent screen → Publish app</p>
+        </div>
+    </div>
+</div>
+
+<div class="window-container">
+
+    <div id="library-show" class="library-show hidden" onclick="toggleLibrary()">Библиотека</div>
+
+    <aside id="library-panel" class="library-panel">
+        <div class="library-head">
+            <h2>Библиотека</h2>
+            <button type="button" class="btn-text" onclick="toggleLibrary()">Скрыть</button>
+        </div>
+        <div id="song-list" class="song-list"></div>
+        <div class="playlist-block">
+            <h3>Плейлисты</h3>
+            <div class="file-row">
+                <input type="text" id="new-playlist-name" class="cozy-input" placeholder="Название плейлиста">
+                <button type="button" class="btn-modal btn-secondary" onclick="createPlaylist()">+</button>
+            </div>
+            <div id="playlist-list" class="playlist-list"></div>
+        </div>
+    </aside>
+    
+    <div class="main-panel">
+        <div class="now-playing-card">
+            <img id="cover" class="cover-art" src="default_cover.png" alt="Cover">
+            <h1 id="title" class="song-title">Выбери трек</h1>
+            <p id="artist" class="song-artist">Нажми Play или добавь музыку через +</p>
+            
+            <div id="playlists" class="song-playlists" onclick="toggleLibrary()">Библиотека</div>
+            <div id="next-preview" class="next-preview">Далее: —</div>
+        </div>
+
+        <div class="progress-bar-container">
+            <span id="time-current" class="time-label">0:00</span>
+            <input type="range" class="slider progress-slider" id="progress-slider" min="0" max="1000" value="0" oninput="onSeek(this.value)">
+            <span id="time-total" class="time-label">0:00</span>
+        </div>
+
+        <div class="controls">
+            <button id="btn-shuffle" class="btn btn-ctrl btn-labeled" onclick="toggleShuffle()" title="Перемешать"><span id="shuffle-label">Перемешать</span></button>
+            <button id="btn-prev" class="btn btn-ctrl" onclick="prevTrack()" title="Назад"><span class="ico ico-prev"></span></button>
+            <button id="btn-play" class="btn btn-main" onclick="togglePlay()" title="Play / Pause"><span id="play-icon" class="ico ico-play"></span></button>
+            <button id="btn-stop" class="btn btn-ctrl" onclick="stopTrack()" title="Стоп"><span class="ico ico-stop"></span></button>
+            <button id="btn-next" class="btn btn-ctrl" onclick="nextTrack()" title="Вперёд"><span class="ico ico-next"></span></button>
+            <button id="btn-loop" class="btn btn-ctrl btn-labeled" onclick="cycleLoopMode()" title="Повтор"><span id="loop-label">По порядку</span></button>
+        </div>
+
+        <div class="bottom-bar">
+            <div class="volume-box">
+                <span class="vol-label">Громкость</span>
+                <input type="range" class="slider" id="volume-slider" min="0" max="100" value="20" oninput="setVolume(this.value)">
+            </div>
+            <button class="btn btn-panel" onclick="toggleSidePanel()">Текст и фон</button>
+            <button class="btn btn-panel" onclick="openSettingsModal()">Настройки</button>
+        </div>
+    </div>
+
+    <div id="side-panel" class="side-panel">
+        <div class="video-wrapper" style="position: relative; width: 100%; height: 200px; background: #000;">
+            <div id="video-container" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%;">
+                <iframe id="youtube-player" 
+                        src="" 
+                        frameborder="0" 
+                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" 
+                        allowfullscreen 
+                        style="width: 100%; height: 100%; pointer-events: none;">
+                </iframe>
+            </div>
+        </div>
+        <div id="lyrics" class="lyrics-box">
+            Общий уютный фон для всех треков. Текст песни появится здесь.
+        </div>
+    </div>
+
+    <div class="fab-zone">
+        <div id="add-track-trigger" onclick="toggleAddMenu()" class="fab-btn">+</div>
+        <div id="add-menu" class="add-menu hidden">
+        <button type="button" onclick="openLocalAdd()">Локальный файл</button>
+        <button type="button" onclick="openCloudModal()">Spotify и Drive</button>
+        <button type="button" onclick="openSpotifyAutoModal()">Спотифай автоматически</button>
+        </div>
+    </div>
+    <div id="toast" class="toast hidden"></div>
+
+    <div id="cloud-modal" class="modal-overlay" style="display: none;">
+        <div class="modal-card modal-card-wide">
+            <h3 class="modal-title">Добавить из Spotify</h3>
+            <input type="text" id="spotify-url" class="cozy-input" placeholder="Ссылка Spotify (https://open.spotify.com/track/...)">
+            <div class="file-row">
+                <input type="text" id="spotify-cover" class="cozy-input" readonly placeholder="Обложка (необязательно)">
+                <button type="button" class="btn-modal btn-secondary" onclick="pickFile('cover')">Обложка</button>
+            </div>
+            <textarea id="spotify-lyrics" class="cozy-input" placeholder="Текст песни (необязательно)..." style="height: 80px; resize: none;"></textarea>
+            <label class="checkbox-row">
+                <input type="checkbox" id="spotify-upload-drive" checked>
+                <span>Загрузить на Google Drive</span>
+            </label>
+            <p id="import-status" class="import-status"></p>
+            <div class="modal-actions">
+                <button type="button" id="btn-spotify-import" class="btn-modal btn-primary" onclick="submitSpotifyImport()">Скачать и добавить</button>
+                <button type="button" class="btn-modal btn-ghost" onclick="closeCloudModal()">Закрыть</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="spotify-auto-modal" class="modal-overlay" style="display: none;">
+        <div class="modal-card modal-card-wide">
+            <h3 class="modal-title">Спотифай автоматически</h3>
+            <p style="font-size:12px;color:#9a86a4;margin:0">
+                Войди в свой аккаунт Spotify в открывшемся окне — все плейлисты и песни
+                из них скачаются на устройство и в Google Drive. Дубликаты добавлены не будут.
+            </p>
+            <div id="spotify-auto-log" class="spotify-auto-log"></div>
+            <p id="spotify-auto-status" class="import-status"></p>
+            <div class="modal-actions">
+                <button type="button" id="btn-spotify-auto-start" class="btn-modal btn-primary" onclick="startSpotifyAutoImport()">Войти и скачать всё</button>
+                <button type="button" id="btn-spotify-auto-stop" class="btn-modal btn-ghost" onclick="stopSpotifyAutoImport()" disabled>Остановить</button>
+                <button type="button" class="btn-modal btn-ghost" onclick="closeSpotifyAutoModal()">Скрыть</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="add-track-modal" class="modal-overlay" style="display: none;">
+        <div class="modal-card">
+            <h3 class="modal-title">Локальный трек</h3>
+            <div class="file-row">
+                <input type="text" id="modal-path" class="cozy-input" readonly placeholder="Файл не выбран">
+                <button type="button" class="btn-modal btn-secondary" onclick="pickFile('audio')">Выбрать файл</button>
+            </div>
+            <input type="text" id="modal-title" class="cozy-input" placeholder="Название">
+            <input type="text" id="modal-artist" class="cozy-input" placeholder="Исполнитель">
+            <div class="file-row">
+                <input type="text" id="modal-cover" class="cozy-input" readonly placeholder="Обложка (необязательно)">
+                <button type="button" class="btn-modal btn-secondary" onclick="pickFile('cover_local')">Обложка</button>
+            </div>
+            <textarea id="modal-lyrics" class="cozy-input" placeholder="Текст песни..." style="height: 100px; resize: none;"></textarea>
+            <div class="modal-actions">
+                <button type="button" class="btn-modal btn-primary" onclick="submitNewSong()">Сохранить</button>
+                <button type="button" class="btn-modal btn-ghost" onclick="toggleAddModal()">Отмена</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="playlist-modal" class="modal-overlay" style="display: none;">
+        <div class="modal-card">
+            <h3 class="modal-title">Добавить в плейлист</h3>
+            <input type="hidden" id="pl-modal-song-id">
+            <div id="pl-modal-list" class="playlist-modal-list"></div>
+            <div class="file-row" style="margin-top:8px">
+                <input type="text" id="pl-modal-new-name" class="cozy-input" placeholder="Новый плейлист...">
+                <button type="button" class="btn-modal btn-secondary" onclick="plModalCreateAndAdd()">+</button>
+            </div>
+            <div class="modal-actions">
+                <button type="button" class="btn-modal btn-primary" onclick="plModalSave()">Сохранить</button>
+                <button type="button" class="btn-modal btn-ghost" onclick="closePlModal()">Закрыть</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="playlist-view-modal" class="modal-overlay" style="display: none;">
+        <div class="modal-card modal-card-wide">
+            <h3 class="modal-title" id="pv-title">Плейлист</h3>
+            <input type="hidden" id="pv-playlist-id">
+            <div id="pv-song-list" class="playlist-songs-list"></div>
+            <div class="modal-actions">
+                <button type="button" class="btn-modal btn-primary" onclick="playCurrentPlaylist()">Воспроизвести все</button>
+                <button type="button" class="btn-modal btn-ghost" onclick="closePlaylistView()">Закрыть</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="rename-playlist-modal" class="modal-overlay" style="display: none;">
+        <div class="modal-card">
+            <h3 class="modal-title">Переименовать плейлист</h3>
+            <input type="hidden" id="rename-pl-id">
+            <input type="text" id="rename-pl-name" class="cozy-input" placeholder="Новое название">
+            <div class="modal-actions">
+                <button type="button" class="btn-modal btn-primary" onclick="submitRenamePl()">Сохранить</button>
+                <button type="button" class="btn-modal btn-ghost" onclick="document.getElementById('rename-playlist-modal').style.display='none'">Отмена</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="settings-modal" class="modal-overlay" style="display: none;">
+        <div class="modal-card modal-card-wide">
+            <h3 class="modal-title">Настройки</h3>
+
+            <div class="drive-box">
+                <h4 style="font-size:14px;color:#7e57c2;margin:0">Google Drive</h4>
+                <p id="drive-status-text" class="drive-status">Google Drive: не подключён</p>
+                <div class="drive-actions">
+                    <button type="button" class="btn-modal btn-secondary" onclick="loginDrive(false)">Войти в Google Drive</button>
+                    <button type="button" class="btn-modal btn-secondary" onclick="loginDrive(true)">Сменить почту</button>
+                    <button type="button" class="btn-modal btn-ghost" onclick="logoutDrive()">Выйти</button>
+                </div>
+                <p class="hint-text">Google Cloud → OAuth consent screen → Publish app (Production). Пока Testing — только почты из Test users.</p>
+                <button type="button" class="btn-modal btn-primary" onclick="syncFromDrive()" style="margin-top:6px">Синхронизировать с Drive</button>
+            </div>
+
+            <div style="margin-top:8px">
+                <h4 style="font-size:14px;color:#7e57c2;margin:0 0 8px 0">Фоновое видео</h4>
+                <p style="font-size:12px;color:#9a86a4;margin-bottom:6px">Выбери webm или mp4 (до 1 мин), будет зациклено на фоне</p>
+                <div class="file-row">
+                    <input type="text" id="settings-video-path" class="cozy-input" readonly placeholder="Видео не выбрано">
+                    <button type="button" class="btn-modal btn-secondary" onclick="pickFile('video_bg')">Выбрать</button>
+                </div>
+            </div>
+
+            <div class="modal-actions">
+                <button type="button" class="btn-modal btn-primary" onclick="applySettings()">Применить</button>
+                <button type="button" class="btn-modal btn-ghost" onclick="document.getElementById('settings-modal').style.display='none'">Закрыть</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="edit-song-modal" class="modal-overlay" style="display: none;">
+        <div class="modal-card">
+            <h3 class="modal-title">Редактировать трек</h3>
+            <input type="hidden" id="edit-song-id">
+            <img id="edit-cover-preview" class="edit-cover-preview" src="" alt="">
+            <input type="text" id="edit-title" class="cozy-input" placeholder="Название">
+            <input type="text" id="edit-artist" class="cozy-input" placeholder="Исполнитель">
+            <div class="file-row">
+                <input type="text" id="edit-cover-path" class="cozy-input" readonly placeholder="Новая обложка">
+                <button type="button" class="btn-modal btn-secondary" onclick="pickFile('cover_edit')">Сменить</button>
+            </div>
+            <textarea id="edit-lyrics" class="cozy-input" style="height: 100px; resize: none;"></textarea>
+            <div class="modal-actions">
+                <button type="button" class="btn-modal btn-primary" onclick="saveEditSong()">Сохранить</button>
+                <button type="button" class="btn-modal btn-ghost" onclick="closeEditModal()">Отмена</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="video.js"></script>
+<script src="script.js"></script>
+</body>
+</html>

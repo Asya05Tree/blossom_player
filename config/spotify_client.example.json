@@ -1,0 +1,5 @@
+{
+  "client_id": "ВСТАВЬ_CLIENT_ID_ИЗ_SPOTIFY_DEVELOPER",
+  "client_secret": "ВСТАВЬ_CLIENT_SECRET",
+  "redirect_uri": "http://127.0.0.1:8888/callback"
+}

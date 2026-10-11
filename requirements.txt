@@ -1,0 +1,11 @@
+PyQt6
+PyQt6-WebEngine
+mutagen
+yt-dlp
+spotipy
+spotdl
+google-auth
+google-auth-oauthlib
+google-api-python-client
+Pillow
+spotapi

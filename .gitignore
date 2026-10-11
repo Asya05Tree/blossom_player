@@ -1,0 +1,39 @@
+# Secrets / local config
+config/app_settings.json
+config/spotify_client.json
+config/credentials.json
+config/token.json
+config/token_*.json
+config/.spotify_cache
+config/.spotify_cache_spotdl
+config/spotify_web_session.json
+config/spotify_web_profile/
+
+# User data (songs, covers, downloads) — not code
+assets/
+testsong/
+*.db
+
+# Third-party redistributable binaries (VLC, ffmpeg) — not our code
+plugins/
+ffmpeg/
+libvlc.dll
+*.dll
+
+# Background videos (large binaries, not code)
+video_backgrounds/
+bg.webm
+bg0.webm
+
+# Python / env
+__pycache__/
+.venv/
+*.pyc
+
+# Logs / build output
+*.log
+build/
+dist/
+
+# Local-only Claude Code settings
+.claude/settings.local.json
