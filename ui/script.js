@@ -299,6 +299,33 @@ function wireBridgeSignals() {
         });
     }
 
+    if (pyBridge.shazamStarted) {
+        pyBridge.shazamStarted.connect(function() {
+            setShazamLock(true);
+        });
+    }
+
+    if (pyBridge.shazamProgress) {
+        pyBridge.shazamProgress.connect(function(msg) {
+            setShazamStatus(msg, false);
+        });
+    }
+
+    if (pyBridge.shazamFinished) {
+        pyBridge.shazamFinished.connect(function(title) {
+            setShazamStatus("Готово: " + title, false, true);
+            setShazamLock(false);
+            if (pyBridge.getLibraryJson) pyBridge.getLibraryJson();
+        });
+    }
+
+    if (pyBridge.shazamFailed) {
+        pyBridge.shazamFailed.connect(function(msg) {
+            setShazamStatus(msg, true);
+            setShazamLock(false);
+        });
+    }
+
     if (pyBridge.ocrFinished) {
         pyBridge.ocrFinished.connect(function(lines) {
             document.getElementById("btn-ocr-run").disabled = false;
@@ -384,6 +411,10 @@ function onFilePicked(path, kind) {
         document.getElementById("settings-video-path").value = path;
     } else if (kind === "ocr_image") {
         document.getElementById("ocr-image-path").value = path;
+    } else if (kind === "shazam_audio") {
+        setShazamLock(true);
+        setShazamStatus("Распознаю файл…");
+        pyBridge.identifyFromAudioFile(path);
     }
 }
 
@@ -965,6 +996,41 @@ function setYoutubeChannelStatus(text, isError, isOk) {
     if (!el) return;
     el.innerText = text || "";
     el.className = "import-status" + (isError ? " error" : isOk ? " ok" : "");
+}
+
+/* === Shazam: identify a song by sound === */
+
+function openShazamModal() {
+    document.getElementById("add-menu").classList.add("hidden");
+    setShazamStatus("");
+    setShazamLock(false);
+    document.getElementById("shazam-modal").style.display = "flex";
+}
+
+function closeShazamModal() {
+    document.getElementById("shazam-modal").style.display = "none";
+}
+
+function setShazamStatus(text, isError, isOk) {
+    var el = document.getElementById("shazam-status");
+    if (!el) return;
+    el.innerText = text || "";
+    el.className = "import-status" + (isError ? " error" : isOk ? " ok" : "");
+}
+
+function setShazamLock(locked) {
+    var listenBtn = document.getElementById("btn-shazam-listen");
+    var fileBtn = document.getElementById("btn-shazam-file");
+    if (listenBtn) listenBtn.disabled = locked;
+    if (fileBtn) fileBtn.disabled = locked;
+}
+
+function startShazamListen() {
+    if (!pyBridge || !pyBridge.startShazamListen) return;
+    const seconds = parseFloat(document.getElementById("shazam-seconds").value) || 8;
+    setShazamLock(true);
+    setShazamStatus("Слушаю " + seconds + " сек…");
+    pyBridge.startShazamListen(seconds);
 }
 
 /* === OCR: recognize song name from an image === */

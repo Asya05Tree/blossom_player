@@ -1,0 +1,85 @@
+from PyQt6.QtCore import QThread, pyqtSignal
+
+from . import database as db
+from .blossom_error import BlossomError
+from .drive import BlossomDriveManager
+from .mic_record_util import record_clip
+from .shazam_util import identify_from_file
+from .youtube_downloader import search_youtube_top_result
+from .youtube_import_pipeline import import_youtube_track_safe
+
+
+class ShazamWorker(QThread):
+    """Слушает микрофон (или берёт готовый аудиофайл), узнаёт трек через Shazam
+    и, если его ещё нет в библиотеке, скачивает через существующий downloader.
+    """
+
+    finished_ok = pyqtSignal(dict)
+    finished_err = pyqtSignal(dict)
+    progress = pyqtSignal(str)
+
+    def __init__(self, drive: BlossomDriveManager, audio_path: str = "", listen_seconds: float = 8.0):
+        super().__init__()
+        self.drive = drive
+        self.audio_path = (audio_path or "").strip()
+        self.listen_seconds = listen_seconds
+
+    def run(self):
+        try:
+            result = self._identify_and_import()
+            if result.get("ok"):
+                self.finished_ok.emit(result)
+            else:
+                self.finished_err.emit(result.get("error") or {})
+        except BlossomError as exc:
+            self.finished_err.emit(exc.to_dict())
+        except Exception as exc:
+            self.finished_err.emit({
+                "stage": "pipeline",
+                "code": "SHAZAM_CRASH",
+                "message": "Ошибка распознавания",
+                "detail": str(exc),
+            })
+
+    def _identify_and_import(self) -> dict:
+        clip_path = self.audio_path
+        if not clip_path:
+            self.progress.emit(f"Слушаю {int(self.listen_seconds)} сек…")
+            clip_path = record_clip(self.listen_seconds)
+
+        self.progress.emit("Узнаю трек через Shazam…")
+        match = identify_from_file(clip_path)
+        if not match or not match.get("title"):
+            return {
+                "ok": False,
+                "error": {
+                    "stage": "pipeline",
+                    "code": "SHAZAM_NO_MATCH",
+                    "message": "Не удалось узнать трек — попробуй поднести ближе к источнику звука",
+                },
+            }
+
+        title, artist = match["title"], match["artist"] or "Unknown Artist"
+        self.progress.emit(f"Узнал: {artist} — {title}")
+
+        existing_id = db.find_song_id_by_title_artist(title, artist)
+        if existing_id:
+            existing = db.get_song(existing_id)
+            return {
+                "ok": True,
+                "duplicate": True,
+                "song_id": existing_id,
+                "title_display": existing.title if existing else title,
+                "artist_display": existing.artist if existing else artist,
+            }
+
+        self.progress.emit("Ищу и скачиваю с YouTube…")
+        hit = search_youtube_top_result(f"{artist} {title}")
+        return import_youtube_track_safe(
+            hit["url"],
+            self.drive,
+            title_override=title,
+            artist_override=artist,
+            upload_to_drive=bool(self.drive.service),
+            progress_callback=lambda msg: self.progress.emit(msg),
+        )

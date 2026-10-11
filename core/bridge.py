@@ -21,6 +21,7 @@ from .blossom_error import BlossomError
 from .trim_util import trim_audio
 from .ocr_worker import OcrWorker
 from .text_search_worker import TextSearchDownloadWorker
+from .shazam_worker import ShazamWorker
 from typing import Optional
 from .text_style import strip_decor, wrap_artist, wrap_title
 
@@ -68,6 +69,10 @@ class BlossomBridge(QObject):
     textSearchProgress = pyqtSignal(str)
     textSearchFinished = pyqtSignal(str)
     textSearchFailed = pyqtSignal(str)
+    shazamStarted = pyqtSignal()
+    shazamProgress = pyqtSignal(str)
+    shazamFinished = pyqtSignal(str)
+    shazamFailed = pyqtSignal(str)
 
     def __init__(self, player: BlossomPlayer, drive: BlossomDriveManager):
         super().__init__()
@@ -87,6 +92,7 @@ class BlossomBridge(QObject):
         self._duplicate_finder_worker = None
         self._ocr_worker = None
         self._text_search_worker = None
+        self._shazam_worker = None
         db.init_db()
         self.player.player.positionChanged.connect(self._on_position_changed)
         self.player.player.durationChanged.connect(self._on_duration_changed)
@@ -264,6 +270,11 @@ class BlossomBridge(QObject):
         elif kind == "ocr_image":
             path, _ = QFileDialog.getOpenFileName(
                 parent, "Выбери картинку", "", "Images (*.png *.jpg *.jpeg *.webp *.bmp)",
+            )
+        elif kind == "shazam_audio":
+            path, _ = QFileDialog.getOpenFileName(
+                parent, "Выбери аудио или видео с записью песни", "",
+                "Audio/Video (*.mp3 *.m4a *.wav *.ogg *.flac *.mp4 *.webm *.mov)",
             )
         if path:
             self.filePicked.emit(path, kind)
@@ -918,6 +929,42 @@ class BlossomBridge(QObject):
         code = err.get("code", "UNKNOWN")
         message = err.get("message", "Не удалось скачать")
         self.textSearchFailed.emit(f"[{stage}:{code}] {message}")
+
+    @pyqtSlot(float)
+    def startShazamListen(self, listen_seconds):
+        self._start_shazam(audio_path="", listen_seconds=listen_seconds or 8.0)
+
+    @pyqtSlot(str)
+    def identifyFromAudioFile(self, audio_path):
+        self._start_shazam(audio_path=audio_path, listen_seconds=0)
+
+    def _start_shazam(self, audio_path: str, listen_seconds: float):
+        if self._shazam_worker and self._shazam_worker.isRunning():
+            self.shazamFailed.emit("Распознавание уже выполняется")
+            return
+        self.shazamStarted.emit()
+        self._shazam_worker = ShazamWorker(
+            drive=self.drive,
+            audio_path=audio_path,
+            listen_seconds=listen_seconds,
+        )
+        self._shazam_worker.progress.connect(self.shazamProgress.emit)
+        self._shazam_worker.finished_ok.connect(self._on_shazam_ok)
+        self._shazam_worker.finished_err.connect(self._on_shazam_err)
+        self._shazam_worker.start()
+
+    def _on_shazam_ok(self, payload):
+        self._emit_library()
+        title = payload.get("title_display") or payload.get("title") or "track"
+        if payload.get("duplicate"):
+            title = f"{title} (уже была в библиотеке)"
+        self.shazamFinished.emit(title)
+
+    def _on_shazam_err(self, err: dict):
+        stage = err.get("stage", "pipeline")
+        code = err.get("code", "UNKNOWN")
+        message = err.get("message", "Не удалось распознать трек")
+        self.shazamFailed.emit(f"[{stage}:{code}] {message}" if code != "SHAZAM_NO_MATCH" else message)
 
     @pyqtSlot()
     def findDuplicates(self):
