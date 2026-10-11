@@ -15,8 +15,9 @@ from .spotify_library_worker import SpotifyLibraryWorker
 from .youtube_import_worker import YoutubeImportWorker
 from .artist_import_worker import ArtistImportWorker
 from .youtube_channel_worker import YoutubeChannelWorker
+from .instrumental_worker import InstrumentalWorker
 from typing import Optional
-from .text_style import wrap_artist, wrap_title
+from .text_style import strip_decor, wrap_artist, wrap_title
 
 DEFAULT_LYRICS = "Текст песни пока не добавлен."
 
@@ -49,6 +50,10 @@ class BlossomBridge(QObject):
     youtubeChannelProgress = pyqtSignal(str)
     youtubeChannelFinished = pyqtSignal(str)
     youtubeChannelFailed = pyqtSignal(str)
+    instrumentalStarted = pyqtSignal(int)
+    instrumentalProgress = pyqtSignal(str)
+    instrumentalFinished = pyqtSignal(str)
+    instrumentalFailed = pyqtSignal(str)
 
     def __init__(self, player: BlossomPlayer, drive: BlossomDriveManager):
         super().__init__()
@@ -64,6 +69,7 @@ class BlossomBridge(QObject):
         self._youtube_import_worker = None
         self._artist_import_worker = None
         self._youtube_channel_worker = None
+        self._instrumental_worker = None
         db.init_db()
         self.player.player.positionChanged.connect(self._on_position_changed)
         self.player.player.durationChanged.connect(self._on_duration_changed)
@@ -93,10 +99,7 @@ class BlossomBridge(QObject):
         self.driveStatusChanged.emit(json.dumps(self.drive.status_snapshot(), ensure_ascii=False))
 
     def _strip_decor(self, text: str) -> str:
-        value = (text or "").strip()
-        for token in ("✧ ", " ✧", "❀ ", " ❀"):
-            value = value.replace(token, "")
-        return value.strip()
+        return strip_decor(text)
 
     def _cover_file_url(self, cover_path: str) -> str:
         if not cover_path or not os.path.isfile(cover_path):
@@ -800,6 +803,35 @@ class BlossomBridge(QObject):
         if detail:
             text += f" — {detail[:300]}"
         self.youtubeChannelFailed.emit(text)
+
+    @pyqtSlot(int)
+    def findInstrumental(self, song_id):
+        if self._instrumental_worker and self._instrumental_worker.isRunning():
+            self.instrumentalFailed.emit("Поиск инструментала уже выполняется")
+            return
+        self.instrumentalStarted.emit(song_id)
+        self._instrumental_worker = InstrumentalWorker(
+            song_id=song_id,
+            drive=self.drive,
+            upload_to_drive=bool(self.drive.service),
+        )
+        self._instrumental_worker.progress.connect(self.instrumentalProgress.emit)
+        self._instrumental_worker.finished_ok.connect(self._on_instrumental_ok)
+        self._instrumental_worker.finished_err.connect(self._on_instrumental_err)
+        self._instrumental_worker.start()
+
+    def _on_instrumental_ok(self, payload):
+        self._emit_library()
+        title = payload.get("title_display") or payload.get("title") or "track"
+        if payload.get("duplicate"):
+            title = f"{title} (уже была в библиотеке)"
+        self.instrumentalFinished.emit(title)
+
+    def _on_instrumental_err(self, err):
+        stage = err.get("stage", "pipeline")
+        code = err.get("code", "UNKNOWN")
+        message = err.get("message", "Не удалось найти инструментал")
+        self.instrumentalFailed.emit(f"[{stage}:{code}] {message}")
 
     @pyqtSlot()
     def importSpotifyLibrary(self):

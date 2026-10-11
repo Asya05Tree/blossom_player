@@ -202,6 +202,80 @@ function wireBridgeSignals() {
         });
     }
 
+    if (pyBridge.artistImportProgress) {
+        pyBridge.artistImportProgress.connect(function(msg) {
+            appendArtistImportLog(msg);
+            setArtistImportStatus(msg, false);
+        });
+    }
+
+    if (pyBridge.artistImportFinished) {
+        pyBridge.artistImportFinished.connect(function(msg) {
+            appendArtistImportLog(msg);
+            setArtistImportStatus(msg, false, true);
+            setArtistImportLock(false);
+            if (pyBridge.getLibraryJson) pyBridge.getLibraryJson();
+        });
+    }
+
+    if (pyBridge.artistImportFailed) {
+        pyBridge.artistImportFailed.connect(function(msg) {
+            appendArtistImportLog(msg);
+            setArtistImportStatus(msg, true);
+            setArtistImportLock(false);
+        });
+    }
+
+    if (pyBridge.youtubeChannelProgress) {
+        pyBridge.youtubeChannelProgress.connect(function(msg) {
+            appendYoutubeChannelLog(msg);
+            setYoutubeChannelStatus(msg, false);
+        });
+    }
+
+    if (pyBridge.youtubeChannelFinished) {
+        pyBridge.youtubeChannelFinished.connect(function(msg) {
+            appendYoutubeChannelLog(msg);
+            setYoutubeChannelStatus(msg, false, true);
+            setYoutubeChannelLock(false);
+            if (pyBridge.getLibraryJson) pyBridge.getLibraryJson();
+        });
+    }
+
+    if (pyBridge.youtubeChannelFailed) {
+        pyBridge.youtubeChannelFailed.connect(function(msg) {
+            appendYoutubeChannelLog(msg);
+            setYoutubeChannelStatus(msg, true);
+            setYoutubeChannelLock(false);
+        });
+    }
+
+    if (pyBridge.instrumentalStarted) {
+        pyBridge.instrumentalStarted.connect(function() {
+            showToast("Ищу инструментал на YouTube…", false);
+        });
+    }
+
+    if (pyBridge.instrumentalProgress) {
+        pyBridge.instrumentalProgress.connect(function(msg) {
+            showToast(msg, false);
+        });
+    }
+
+    if (pyBridge.instrumentalFinished) {
+        pyBridge.instrumentalFinished.connect(function(title) {
+            showToast("Инструментал добавлен: " + title, false);
+            if (pyBridge.getLibraryJson) pyBridge.getLibraryJson();
+        });
+    }
+
+    if (pyBridge.instrumentalFailed) {
+        pyBridge.instrumentalFailed.connect(function(msg) {
+            showToast(msg, true);
+            if (pyBridge.getLibraryJson) pyBridge.getLibraryJson();
+        });
+    }
+
     if (pyBridge.songForEditReady) {
         pyBridge.songForEditReady.connect(function(json) {
             _populateEditModal(json);
@@ -279,6 +353,7 @@ function renderLibrary(json) {
             "<button type='button' data-play='" + s.id + "'>Play</button>" +
             "<button type='button' data-playlist='" + s.id + "'>Плейлист</button>" +
             "<button type='button' data-edit='" + s.id + "'>Изм.</button>" +
+            "<button type='button' data-instr='" + s.id + "' title='Найти инструментал на YouTube'>Инстр.</button>" +
             "<button type='button' data-del='" + s.id + "'>Удал.</button>" +
             "</div>";
         list.appendChild(row);
@@ -300,6 +375,12 @@ function renderLibrary(json) {
     list.querySelectorAll("[data-del]").forEach(function(btn) {
         btn.onclick = function() {
             if (confirm("Удалить этот трек?")) pyBridge.deleteSongById(parseInt(btn.getAttribute("data-del")));
+        };
+    });
+    list.querySelectorAll("[data-instr]").forEach(function(btn) {
+        btn.onclick = function() {
+            btn.disabled = true;
+            pyBridge.findInstrumental(parseInt(btn.getAttribute("data-instr")));
         };
     });
 }
@@ -690,6 +771,128 @@ function appendSpotifyAutoLog(msg) {
 
 function setSpotifyAutoStatus(text, isError, isOk) {
     var el = document.getElementById("spotify-auto-status");
+    if (!el) return;
+    el.innerText = text || "";
+    el.className = "import-status" + (isError ? " error" : isOk ? " ok" : "");
+}
+
+/* === Artist discography (Spotify) === */
+
+var artistImportRunning = false;
+
+function openArtistModal() {
+    document.getElementById("add-menu").classList.add("hidden");
+    document.getElementById("artist-query").value = "";
+    document.getElementById("artist-import-modal").style.display = "flex";
+    if (!artistImportRunning) {
+        document.getElementById("artist-import-log").innerText = "";
+        setArtistImportStatus("");
+    }
+}
+
+function closeArtistModal() {
+    document.getElementById("artist-import-modal").style.display = "none";
+}
+
+function startArtistImport() {
+    if (!pyBridge || !pyBridge.importArtistFromSpotify) return;
+    if (artistImportRunning) return;
+    const query = document.getElementById("artist-query").value.trim();
+    if (!query) {
+        setArtistImportStatus("Вставь ссылку на артиста или имя", true);
+        return;
+    }
+    document.getElementById("artist-import-log").innerText = "";
+    appendArtistImportLog("Начинаю поиск и скачивание…");
+    setArtistImportLock(true);
+    pyBridge.importArtistFromSpotify(query);
+}
+
+function stopArtistImport() {
+    if (pyBridge && pyBridge.stopArtistImport) pyBridge.stopArtistImport();
+}
+
+function setArtistImportLock(locked) {
+    artistImportRunning = locked;
+    var startBtn = document.getElementById("btn-artist-import-start");
+    var stopBtn = document.getElementById("btn-artist-import-stop");
+    if (startBtn) startBtn.disabled = locked;
+    if (stopBtn) stopBtn.disabled = !locked;
+}
+
+function appendArtistImportLog(msg) {
+    var log = document.getElementById("artist-import-log");
+    if (!log || !msg) return;
+    var line = document.createElement("div");
+    line.innerText = msg;
+    log.appendChild(line);
+    while (log.childNodes.length > 300) log.removeChild(log.firstChild);
+    log.scrollTop = log.scrollHeight;
+}
+
+function setArtistImportStatus(text, isError, isOk) {
+    var el = document.getElementById("artist-import-status");
+    if (!el) return;
+    el.innerText = text || "";
+    el.className = "import-status" + (isError ? " error" : isOk ? " ok" : "");
+}
+
+/* === YouTube channel/playlist bulk import === */
+
+var youtubeChannelRunning = false;
+
+function openYoutubeChannelModal() {
+    document.getElementById("add-menu").classList.add("hidden");
+    document.getElementById("youtube-channel-url").value = "";
+    document.getElementById("youtube-channel-modal").style.display = "flex";
+    if (!youtubeChannelRunning) {
+        document.getElementById("youtube-channel-log").innerText = "";
+        setYoutubeChannelStatus("");
+    }
+}
+
+function closeYoutubeChannelModal() {
+    document.getElementById("youtube-channel-modal").style.display = "none";
+}
+
+function startYoutubeChannelImport() {
+    if (!pyBridge || !pyBridge.importYoutubeChannel) return;
+    if (youtubeChannelRunning) return;
+    const url = document.getElementById("youtube-channel-url").value.trim();
+    if (!url || url.indexOf("youtu") === -1) {
+        setYoutubeChannelStatus("Нужна ссылка на канал или плейлист YouTube", true);
+        return;
+    }
+    document.getElementById("youtube-channel-log").innerText = "";
+    appendYoutubeChannelLog("Читаю список видео…");
+    setYoutubeChannelLock(true);
+    pyBridge.importYoutubeChannel(url);
+}
+
+function stopYoutubeChannelImport() {
+    if (pyBridge && pyBridge.stopYoutubeChannel) pyBridge.stopYoutubeChannel();
+}
+
+function setYoutubeChannelLock(locked) {
+    youtubeChannelRunning = locked;
+    var startBtn = document.getElementById("btn-youtube-channel-start");
+    var stopBtn = document.getElementById("btn-youtube-channel-stop");
+    if (startBtn) startBtn.disabled = locked;
+    if (stopBtn) stopBtn.disabled = !locked;
+}
+
+function appendYoutubeChannelLog(msg) {
+    var log = document.getElementById("youtube-channel-log");
+    if (!log || !msg) return;
+    var line = document.createElement("div");
+    line.innerText = msg;
+    log.appendChild(line);
+    while (log.childNodes.length > 300) log.removeChild(log.firstChild);
+    log.scrollTop = log.scrollHeight;
+}
+
+function setYoutubeChannelStatus(text, isError, isOk) {
+    var el = document.getElementById("youtube-channel-status");
     if (!el) return;
     el.innerText = text || "";
     el.className = "import-status" + (isError ? " error" : isOk ? " ok" : "");

@@ -100,6 +100,8 @@
         <button type="button" onclick="openCloudModal()">Spotify и Drive</button>
         <button type="button" onclick="openSpotifyAutoModal()">Спотифай автоматически</button>
         <button type="button" onclick="openYoutubeModal()">YouTube по ссылке</button>
+        <button type="button" onclick="openArtistModal()">Дискография артиста</button>
+        <button type="button" onclick="openYoutubeChannelModal()">Канал YouTube целиком</button>
         </div>
     </div>
     <div id="toast" class="toast hidden"></div>
@@ -159,6 +161,43 @@
             <div class="modal-actions">
                 <button type="button" id="btn-youtube-import" class="btn-modal btn-primary" onclick="submitYoutubeImport()">Скачать и добавить</button>
                 <button type="button" class="btn-modal btn-ghost" onclick="closeYoutubeModal()">Закрыть</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="artist-import-modal" class="modal-overlay" style="display: none;">
+        <div class="modal-card modal-card-wide">
+            <h3 class="modal-title">Дискография артиста (Spotify)</h3>
+            <p style="font-size:12px;color:#9a86a4;margin:0">
+                Вставь ссылку на артиста Spotify или просто имя. Нужен вход в Spotify
+                (через «Спотифай автоматически»). Все найденные треки скачаются и попадут
+                в плейлист «Дискография: имя артиста». Дубликаты не скачиваются повторно.
+            </p>
+            <input type="text" id="artist-query" class="cozy-input" placeholder="Ссылка на артиста или имя группы/исполнителя">
+            <div id="artist-import-log" class="spotify-auto-log"></div>
+            <p id="artist-import-status" class="import-status"></p>
+            <div class="modal-actions">
+                <button type="button" id="btn-artist-import-start" class="btn-modal btn-primary" onclick="startArtistImport()">Скачать всё</button>
+                <button type="button" id="btn-artist-import-stop" class="btn-modal btn-ghost" onclick="stopArtistImport()" disabled>Остановить</button>
+                <button type="button" class="btn-modal btn-ghost" onclick="closeArtistModal()">Скрыть</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="youtube-channel-modal" class="modal-overlay" style="display: none;">
+        <div class="modal-card modal-card-wide">
+            <h3 class="modal-title">Канал YouTube целиком</h3>
+            <p style="font-size:12px;color:#9a86a4;margin:0">
+                Вставь ссылку на канал (youtube.com/@имя) или плейлист. Скачается аудио
+                из последних видео (максимум 50 за раз) в плейлист «YouTube: название».
+            </p>
+            <input type="text" id="youtube-channel-url" class="cozy-input" placeholder="Ссылка на канал или плейлист YouTube">
+            <div id="youtube-channel-log" class="spotify-auto-log"></div>
+            <p id="youtube-channel-status" class="import-status"></p>
+            <div class="modal-actions">
+                <button type="button" id="btn-youtube-channel-start" class="btn-modal btn-primary" onclick="startYoutubeChannelImport()">Скачать всё</button>
+                <button type="button" id="btn-youtube-channel-stop" class="btn-modal btn-ghost" onclick="stopYoutubeChannelImport()" disabled>Остановить</button>
+                <button type="button" class="btn-modal btn-ghost" onclick="closeYoutubeChannelModal()">Скрыть</button>
             </div>
         </div>
     </div>

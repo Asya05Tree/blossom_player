@@ -36,6 +36,14 @@ def wrap_artist(raw_artist: str) -> str:
     return display
 
 
+def strip_decor(text: str) -> str:
+    """Убирает декоративные ✧/❀ обёртки, оставляя чистый текст (для поиска, сравнений)."""
+    value = (text or "").strip()
+    for token in (TITLE_PREFIX, TITLE_SUFFIX, ARTIST_PREFIX, ARTIST_SUFFIX):
+        value = value.replace(token, "")
+    return value.strip()
+
+
 def unwrap_for_filename(display: str) -> str:
     value = (display or "").strip()
     for token in (TITLE_PREFIX, TITLE_SUFFIX, ARTIST_PREFIX, ARTIST_SUFFIX):

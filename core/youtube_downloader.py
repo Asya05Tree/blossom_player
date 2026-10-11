@@ -14,6 +14,10 @@ VIDEO_ID_RE = re.compile(
     r'(?:youtube\.com/(?:watch\?v=|shorts/|embed/)|youtu\.be/)([A-Za-z0-9_-]{11})'
 )
 
+# Клиент "android" меньше подвержен антибот-проверке YouTube ("Sign in to confirm
+# you're not a bot"), в отличие от дефолтного веб-клиента yt-dlp.
+_RESILIENT_EXTRACTOR_ARGS = {"youtube": {"player_client": ["android", "web"]}}
+
 
 def extract_video_id(url: str) -> str:
     match = VIDEO_ID_RE.search((url or "").strip())
@@ -50,6 +54,7 @@ def download_youtube_audio(url: str) -> dict[str, Any]:
         "no_warnings": True,
         "noplaylist": True,
         "noprogress": True,
+        "extractor_args": _RESILIENT_EXTRACTOR_ARGS,
     }
     try:
         with YoutubeDL(ydl_opts) as ydl:
@@ -86,6 +91,38 @@ def download_youtube_audio(url: str) -> dict[str, Any]:
     }
 
 
+def search_youtube_top_result(query: str) -> dict[str, Any]:
+    """Возвращает лучший результат поиска YouTube по текстовому запросу (без скачивания)."""
+    clean_query = (query or "").strip()
+    if not clean_query:
+        fail(Stage.YOUTUBE_DOWNLOAD, "YOUTUBE_SEARCH_QUERY_EMPTY", "Пустой поисковый запрос")
+    ydl_opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "extract_flat": True,
+        "noplaylist": True,
+        "extractor_args": _RESILIENT_EXTRACTOR_ARGS,
+    }
+    try:
+        with YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(f"ytsearch1:{clean_query}", download=False)
+    except Exception as exc:
+        fail(Stage.YOUTUBE_DOWNLOAD, "YOUTUBE_SEARCH_FAIL", "Не удалось выполнить поиск на YouTube", str(exc))
+
+    entries = (info or {}).get("entries") or ([info] if info and info.get("id") else [])
+    if not entries:
+        fail(Stage.YOUTUBE_DOWNLOAD, "YOUTUBE_SEARCH_EMPTY", "Поиск не дал результатов", clean_query)
+    top = entries[0]
+    video_id = top.get("id") or ""
+    if not video_id:
+        fail(Stage.YOUTUBE_DOWNLOAD, "YOUTUBE_SEARCH_EMPTY", "Поиск не дал результатов", clean_query)
+    return {
+        "id": video_id,
+        "title": (top.get("title") or "").strip(),
+        "url": top.get("url") or f"https://www.youtube.com/watch?v={video_id}",
+    }
+
+
 def list_channel_or_playlist_videos(url: str, limit: int = 50) -> dict[str, Any]:
     """Список видео канала/плейлиста без скачивания (для массовой закачки).
 
@@ -103,6 +140,7 @@ def list_channel_or_playlist_videos(url: str, limit: int = 50) -> dict[str, Any]
         "no_warnings": True,
         "extract_flat": True,
         "playlistend": limit,
+        "extractor_args": _RESILIENT_EXTRACTOR_ARGS,
     }
     try:
         with YoutubeDL(ydl_opts) as ydl:
