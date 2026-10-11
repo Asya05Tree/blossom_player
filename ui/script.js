@@ -299,6 +299,46 @@ function wireBridgeSignals() {
         });
     }
 
+    if (pyBridge.ocrFinished) {
+        pyBridge.ocrFinished.connect(function(lines) {
+            document.getElementById("btn-ocr-run").disabled = false;
+            setOcrStatus("Готово. Выбери строку, которую скачать.", false, true);
+            renderOcrResults(lines || []);
+        });
+    }
+
+    if (pyBridge.ocrFailed) {
+        pyBridge.ocrFailed.connect(function(msg) {
+            document.getElementById("btn-ocr-run").disabled = false;
+            setOcrStatus(msg, true);
+        });
+    }
+
+    if (pyBridge.textSearchStarted) {
+        pyBridge.textSearchStarted.connect(function() {
+            showToast("Ищу на YouTube…", false);
+        });
+    }
+
+    if (pyBridge.textSearchProgress) {
+        pyBridge.textSearchProgress.connect(function(msg) {
+            showToast(msg, false);
+        });
+    }
+
+    if (pyBridge.textSearchFinished) {
+        pyBridge.textSearchFinished.connect(function(title) {
+            showToast("Добавлено: " + title, false);
+            if (pyBridge.getLibraryJson) pyBridge.getLibraryJson();
+        });
+    }
+
+    if (pyBridge.textSearchFailed) {
+        pyBridge.textSearchFailed.connect(function(msg) {
+            showToast(msg, true);
+        });
+    }
+
     if (pyBridge.songForEditReady) {
         pyBridge.songForEditReady.connect(function(json) {
             _populateEditModal(json);
@@ -342,6 +382,8 @@ function onFilePicked(path, kind) {
         document.getElementById("edit-cover-preview").src = "file:///" + path.replace(/\\/g, "/");
     } else if (kind === "video_bg") {
         document.getElementById("settings-video-path").value = path;
+    } else if (kind === "ocr_image") {
+        document.getElementById("ocr-image-path").value = path;
     }
 }
 
@@ -923,6 +965,65 @@ function setYoutubeChannelStatus(text, isError, isOk) {
     if (!el) return;
     el.innerText = text || "";
     el.className = "import-status" + (isError ? " error" : isOk ? " ok" : "");
+}
+
+/* === OCR: recognize song name from an image === */
+
+function openOcrModal() {
+    document.getElementById("add-menu").classList.add("hidden");
+    document.getElementById("ocr-image-path").value = "";
+    document.getElementById("ocr-results").innerHTML = "";
+    setOcrStatus("");
+    document.getElementById("ocr-modal").style.display = "flex";
+}
+
+function closeOcrModal() {
+    document.getElementById("ocr-modal").style.display = "none";
+}
+
+function setOcrStatus(text, isError, isOk) {
+    var el = document.getElementById("ocr-status");
+    if (!el) return;
+    el.innerText = text || "";
+    el.className = "import-status" + (isError ? " error" : isOk ? " ok" : "");
+}
+
+function submitOcr() {
+    const path = document.getElementById("ocr-image-path").value.trim();
+    if (!path) {
+        setOcrStatus("Сначала выбери картинку", true);
+        return;
+    }
+    const lang = document.getElementById("ocr-lang").value;
+    document.getElementById("ocr-results").innerHTML = "";
+    setOcrStatus("Распознаю…");
+    document.getElementById("btn-ocr-run").disabled = true;
+    pyBridge.recognizeImageText(path, lang);
+}
+
+function renderOcrResults(lines) {
+    var list = document.getElementById("ocr-results");
+    list.innerHTML = "";
+    if (!lines.length) {
+        list.innerHTML = "<p style='font-size:12px;color:#9a86a4'>Текст не распознан.</p>";
+        return;
+    }
+    lines.forEach(function(line) {
+        var row = document.createElement("div");
+        row.className = "duplicate-row";
+        var span = document.createElement("span");
+        span.innerText = line;
+        var btn = document.createElement("button");
+        btn.type = "button";
+        btn.innerText = "Скачать";
+        btn.onclick = function() {
+            btn.disabled = true;
+            pyBridge.downloadFromText(line);
+        };
+        row.appendChild(span);
+        row.appendChild(btn);
+        list.appendChild(row);
+    });
 }
 
 /* === Trim start/end === */

@@ -103,6 +103,7 @@
         <button type="button" onclick="openYoutubeModal()">YouTube по ссылке</button>
         <button type="button" onclick="openArtistModal()">Дискография артиста</button>
         <button type="button" onclick="openYoutubeChannelModal()">Канал YouTube целиком</button>
+        <button type="button" onclick="openOcrModal()">Распознать с картинки</button>
         </div>
     </div>
     <div id="toast" class="toast hidden"></div>
@@ -199,6 +200,33 @@
                 <button type="button" id="btn-youtube-channel-start" class="btn-modal btn-primary" onclick="startYoutubeChannelImport()">Скачать всё</button>
                 <button type="button" id="btn-youtube-channel-stop" class="btn-modal btn-ghost" onclick="stopYoutubeChannelImport()" disabled>Остановить</button>
                 <button type="button" class="btn-modal btn-ghost" onclick="closeYoutubeChannelModal()">Скрыть</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="ocr-modal" class="modal-overlay" style="display: none;">
+        <div class="modal-card modal-card-wide">
+            <h3 class="modal-title">Распознать название с картинки</h3>
+            <p style="font-size:12px;color:#9a86a4;margin:0">
+                Подойдёт скриншот плейлиста, фото обложки с названием и т.п.
+                Выбери язык текста на картинке для лучшего распознавания.
+            </p>
+            <div class="file-row">
+                <input type="text" id="ocr-image-path" class="cozy-input" readonly placeholder="Картинка не выбрана">
+                <button type="button" class="btn-modal btn-secondary" onclick="pickFile('ocr_image')">Выбрать картинку</button>
+            </div>
+            <select id="ocr-lang" class="cozy-input">
+                <option value="en">Английский / другой латинский</option>
+                <option value="ru">Русский</option>
+                <option value="ko">Корейский</option>
+                <option value="ja">Японский</option>
+                <option value="ch">Китайский</option>
+            </select>
+            <p id="ocr-status" class="import-status"></p>
+            <div id="ocr-results" class="spotify-auto-log"></div>
+            <div class="modal-actions">
+                <button type="button" id="btn-ocr-run" class="btn-modal btn-primary" onclick="submitOcr()">Распознать</button>
+                <button type="button" class="btn-modal btn-ghost" onclick="closeOcrModal()">Закрыть</button>
             </div>
         </div>
     </div>

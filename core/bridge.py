@@ -19,6 +19,8 @@ from .instrumental_worker import InstrumentalWorker
 from .duplicate_finder_worker import DuplicateFinderWorker
 from .blossom_error import BlossomError
 from .trim_util import trim_audio
+from .ocr_worker import OcrWorker
+from .text_search_worker import TextSearchDownloadWorker
 from typing import Optional
 from .text_style import strip_decor, wrap_artist, wrap_title
 
@@ -60,6 +62,12 @@ class BlossomBridge(QObject):
     duplicatesScanProgress = pyqtSignal(str)
     duplicatesScanFinished = pyqtSignal(str)
     duplicatesScanFailed = pyqtSignal(str)
+    ocrFinished = pyqtSignal(list)
+    ocrFailed = pyqtSignal(str)
+    textSearchStarted = pyqtSignal(str)
+    textSearchProgress = pyqtSignal(str)
+    textSearchFinished = pyqtSignal(str)
+    textSearchFailed = pyqtSignal(str)
 
     def __init__(self, player: BlossomPlayer, drive: BlossomDriveManager):
         super().__init__()
@@ -77,6 +85,8 @@ class BlossomBridge(QObject):
         self._youtube_channel_worker = None
         self._instrumental_worker = None
         self._duplicate_finder_worker = None
+        self._ocr_worker = None
+        self._text_search_worker = None
         db.init_db()
         self.player.player.positionChanged.connect(self._on_position_changed)
         self.player.player.durationChanged.connect(self._on_duration_changed)
@@ -250,6 +260,10 @@ class BlossomBridge(QObject):
         elif kind == "video_bg":
             path, _ = QFileDialog.getOpenFileName(
                 parent, "Выбери видео для фона", "", "Video (*.webm *.mp4)",
+            )
+        elif kind == "ocr_image":
+            path, _ = QFileDialog.getOpenFileName(
+                parent, "Выбери картинку", "", "Images (*.png *.jpg *.jpeg *.webp *.bmp)",
             )
         if path:
             self.filePicked.emit(path, kind)
@@ -859,6 +873,51 @@ class BlossomBridge(QObject):
         self._reload_queue_keep(song_id)
         self._update_ui_state()
         self.toastMessage.emit(f"Обрезано. Новая длительность: {int(new_duration)} сек", False)
+
+    @pyqtSlot(str, str)
+    def recognizeImageText(self, image_path, lang):
+        if self._ocr_worker and self._ocr_worker.isRunning():
+            self.ocrFailed.emit("Распознавание уже выполняется")
+            return
+        self._ocr_worker = OcrWorker(image_path=image_path, lang=lang or "en")
+        self._ocr_worker.finished_ok.connect(self.ocrFinished.emit)
+        self._ocr_worker.finished_err.connect(self._on_ocr_err)
+        self._ocr_worker.start()
+
+    def _on_ocr_err(self, err: dict):
+        stage = err.get("stage", "pipeline")
+        code = err.get("code", "UNKNOWN")
+        message = err.get("message", "Не удалось распознать текст")
+        self.ocrFailed.emit(f"[{stage}:{code}] {message}")
+
+    @pyqtSlot(str)
+    def downloadFromText(self, query):
+        if self._text_search_worker and self._text_search_worker.isRunning():
+            self.textSearchFailed.emit("Поиск уже выполняется")
+            return
+        self.textSearchStarted.emit(query)
+        self._text_search_worker = TextSearchDownloadWorker(
+            query=query,
+            drive=self.drive,
+            upload_to_drive=bool(self.drive.service),
+        )
+        self._text_search_worker.progress.connect(self.textSearchProgress.emit)
+        self._text_search_worker.finished_ok.connect(self._on_text_search_ok)
+        self._text_search_worker.finished_err.connect(self._on_text_search_err)
+        self._text_search_worker.start()
+
+    def _on_text_search_ok(self, payload):
+        self._emit_library()
+        title = payload.get("title_display") or payload.get("title") or "track"
+        if payload.get("duplicate"):
+            title = f"{title} (уже была в библиотеке)"
+        self.textSearchFinished.emit(title)
+
+    def _on_text_search_err(self, err: dict):
+        stage = err.get("stage", "pipeline")
+        code = err.get("code", "UNKNOWN")
+        message = err.get("message", "Не удалось скачать")
+        self.textSearchFailed.emit(f"[{stage}:{code}] {message}")
 
     @pyqtSlot()
     def findDuplicates(self):
