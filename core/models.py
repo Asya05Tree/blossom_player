@@ -22,6 +22,7 @@ class Song:
     drive_lyrics_id: Optional[str] = None
     drive_meta_id: Optional[str] = None
     spotify_track_id: Optional[str] = None # ID трека в Spotify (для дедупликации)
+    youtube_video_id: Optional[str] = None # ID видео на YouTube (для дедупликации)
 
 @dataclass
 class Playlist:

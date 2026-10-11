@@ -1,0 +1,129 @@
+import os
+import re
+from typing import Any
+
+from mutagen.easyid3 import EasyID3
+from mutagen.id3 import ID3NoHeaderError
+from yt_dlp import YoutubeDL
+
+from .blossom_error import Stage, fail
+from .ffmpeg_util import resolve_ffmpeg
+from .paths import DOWNLOADS_DIR, TEMP_DIR
+
+VIDEO_ID_RE = re.compile(
+    r'(?:youtube\.com/(?:watch\?v=|shorts/|embed/)|youtu\.be/)([A-Za-z0-9_-]{11})'
+)
+
+
+def extract_video_id(url: str) -> str:
+    match = VIDEO_ID_RE.search((url or "").strip())
+    if not match:
+        fail(Stage.YOUTUBE_DOWNLOAD, "YOUTUBE_URL_INVALID", "Не похоже на ссылку YouTube", url or "")
+    return match.group(1)
+
+
+def download_youtube_audio(url: str) -> dict[str, Any]:
+    """Скачивает аудио видео YouTube как mp3 и прописывает базовые ID3-теги.
+
+    Возвращает title/artist, взятые из метаданных видео (uploader как fallback-автор) —
+    их можно переопределить в UI перед сохранением в библиотеку.
+    """
+    video_id = extract_video_id(url)
+    try:
+        os.makedirs(DOWNLOADS_DIR, exist_ok=True)
+        os.makedirs(TEMP_DIR, exist_ok=True)
+    except OSError as exc:
+        fail(Stage.FILE_IO, "DOWNLOAD_DIR_CREATE_FAIL", "Не удалось создать папку загрузок", str(exc))
+
+    outtmpl = os.path.join(DOWNLOADS_DIR, f"yt_{video_id}.%(ext)s")
+    ffmpeg_dir = os.path.dirname(resolve_ffmpeg())
+    ydl_opts = {
+        "format": "bestaudio/best",
+        "outtmpl": outtmpl,
+        "ffmpeg_location": ffmpeg_dir,
+        "postprocessors": [{
+            "key": "FFmpegExtractAudio",
+            "preferredcodec": "mp3",
+            "preferredquality": "192",
+        }],
+        "quiet": True,
+        "no_warnings": True,
+        "noplaylist": True,
+        "noprogress": True,
+    }
+    try:
+        with YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=True)
+    except Exception as exc:
+        fail(Stage.YOUTUBE_DOWNLOAD, "YOUTUBE_DOWNLOAD_FAIL", "yt-dlp не смог скачать видео", str(exc))
+
+    final_path = os.path.join(DOWNLOADS_DIR, f"yt_{video_id}.mp3")
+    if not os.path.isfile(final_path) or os.path.getsize(final_path) <= 0:
+        fail(Stage.YOUTUBE_DOWNLOAD, "YOUTUBE_AUDIO_MISSING", "Аудиофайл после скачивания не найден", final_path)
+
+    raw_title = (info.get("track") or info.get("title") or "Unknown Title").strip()
+    raw_artist = (info.get("artist") or info.get("uploader") or "Unknown Artist").strip()
+    thumbnail_url = info.get("thumbnail") or ""
+    duration = info.get("duration") or 0
+
+    try:
+        tags = EasyID3(final_path)
+    except ID3NoHeaderError:
+        tags = EasyID3()
+        tags.save(final_path)
+        tags = EasyID3(final_path)
+    tags["title"] = raw_title
+    tags["artist"] = raw_artist
+    tags.save(final_path)
+
+    return {
+        "title": raw_title,
+        "artist": raw_artist,
+        "filepath": final_path,
+        "video_id": video_id,
+        "thumbnail_url": thumbnail_url,
+        "duration": duration,
+    }
+
+
+def list_channel_or_playlist_videos(url: str, limit: int = 50) -> dict[str, Any]:
+    """Список видео канала/плейлиста без скачивания (для массовой закачки).
+
+    Возвращает {"source_title": str, "videos": [{"id", "url", "title"}, ...]}.
+    Для простой ссылки на канал (без вкладки) подставляет "/videos".
+    """
+    target = (url or "").strip()
+    if not target:
+        fail(Stage.YOUTUBE_DOWNLOAD, "YOUTUBE_CHANNEL_URL_EMPTY", "Нужна ссылка на канал или плейлист")
+    if "list=" not in target and "/videos" not in target and "/playlists" not in target:
+        target = target.rstrip("/") + "/videos"
+
+    ydl_opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "extract_flat": True,
+        "playlistend": limit,
+    }
+    try:
+        with YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(target, download=False)
+    except Exception as exc:
+        fail(Stage.YOUTUBE_DOWNLOAD, "YOUTUBE_CHANNEL_FETCH_FAIL", "Не удалось прочитать список видео", str(exc))
+
+    if not isinstance(info, dict):
+        fail(Stage.YOUTUBE_DOWNLOAD, "YOUTUBE_CHANNEL_EMPTY", "Пустой ответ по ссылке канала/плейлиста")
+
+    source_title = (info.get("title") or "").strip() or "YouTube"
+    videos = []
+    for entry in info.get("entries") or []:
+        if not entry:
+            continue
+        video_id = entry.get("id") or ""
+        if not video_id:
+            continue
+        videos.append({
+            "id": video_id,
+            "url": entry.get("url") or f"https://www.youtube.com/watch?v={video_id}",
+            "title": (entry.get("title") or "").strip(),
+        })
+    return {"source_title": source_title, "videos": videos}

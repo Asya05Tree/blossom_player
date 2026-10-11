@@ -28,7 +28,8 @@ def init_db():
             drive_cover_id TEXT,
             drive_lyrics_id TEXT,
             drive_meta_id TEXT,
-            spotify_track_id TEXT
+            spotify_track_id TEXT,
+            youtube_video_id TEXT
         )
     ''')
     # Add columns if upgrading from old schema
@@ -46,6 +47,10 @@ def init_db():
         pass
     try:
         cursor.execute("ALTER TABLE songs ADD COLUMN spotify_track_id TEXT")
+    except Exception:
+        pass
+    try:
+        cursor.execute("ALTER TABLE songs ADD COLUMN youtube_video_id TEXT")
     except Exception:
         pass
     cursor.execute('''
@@ -71,11 +76,11 @@ def add_song(song: Song) -> int:
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute('''
-        INSERT INTO songs (title, artist, filepath, cover_path, lyrics, video_link, drive_file_id, drive_cover_id, drive_lyrics_id, drive_meta_id, spotify_track_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO songs (title, artist, filepath, cover_path, lyrics, video_link, drive_file_id, drive_cover_id, drive_lyrics_id, drive_meta_id, spotify_track_id, youtube_video_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ''', (song.title, song.artist, song.filepath, song.cover_path, song.lyrics, song.video_link,
           song.drive_file_id, song.drive_cover_id, song.drive_lyrics_id, song.drive_meta_id,
-          song.spotify_track_id))
+          song.spotify_track_id, song.youtube_video_id))
     conn.commit()
     song_id = cursor.lastrowid
     conn.close()
@@ -96,6 +101,7 @@ def _row_to_song(row) -> Song:
         drive_lyrics_id=_get("drive_lyrics_id"),
         drive_meta_id=_get("drive_meta_id"),
         spotify_track_id=_get("spotify_track_id"),
+        youtube_video_id=_get("youtube_video_id"),
     )
 
 
@@ -142,6 +148,27 @@ def set_song_spotify_id(song_id: int, spotify_track_id: str) -> None:
     conn.cursor().execute(
         'UPDATE songs SET spotify_track_id = ? WHERE id = ?',
         (spotify_track_id, song_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def find_song_id_by_youtube_id(youtube_video_id: str) -> Optional[int]:
+    if not youtube_video_id:
+        return None
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute('SELECT id FROM songs WHERE youtube_video_id = ?', (youtube_video_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return row[0] if row else None
+
+
+def set_song_youtube_id(song_id: int, youtube_video_id: str) -> None:
+    conn = get_connection()
+    conn.cursor().execute(
+        'UPDATE songs SET youtube_video_id = ? WHERE id = ?',
+        (youtube_video_id, song_id),
     )
     conn.commit()
     conn.close()

@@ -12,6 +12,9 @@ from .drive_upload_worker import DriveUploadWorker
 from .drive_sync_worker import DriveSyncWorker, DriveDownloadWorker
 from .spotify_import_worker import SpotifyImportWorker
 from .spotify_library_worker import SpotifyLibraryWorker
+from .youtube_import_worker import YoutubeImportWorker
+from .artist_import_worker import ArtistImportWorker
+from .youtube_channel_worker import YoutubeChannelWorker
 from typing import Optional
 from .text_style import wrap_artist, wrap_title
 
@@ -36,6 +39,16 @@ class BlossomBridge(QObject):
     spotifyAutoProgress = pyqtSignal(str)
     spotifyAutoFinished = pyqtSignal(str)
     spotifyAutoFailed = pyqtSignal(str)
+    youtubeImportStarted = pyqtSignal(str)
+    youtubeImportProgress = pyqtSignal(str)
+    youtubeImportFinished = pyqtSignal(str)
+    youtubeImportFailed = pyqtSignal(str, str, str)
+    artistImportProgress = pyqtSignal(str)
+    artistImportFinished = pyqtSignal(str)
+    artistImportFailed = pyqtSignal(str)
+    youtubeChannelProgress = pyqtSignal(str)
+    youtubeChannelFinished = pyqtSignal(str)
+    youtubeChannelFailed = pyqtSignal(str)
 
     def __init__(self, player: BlossomPlayer, drive: BlossomDriveManager):
         super().__init__()
@@ -48,6 +61,9 @@ class BlossomBridge(QObject):
         self._spotify_library_worker = None
         self._spotify_login_dialog = None
         self._spotify_relogin_done = False
+        self._youtube_import_worker = None
+        self._artist_import_worker = None
+        self._youtube_channel_worker = None
         db.init_db()
         self.player.player.positionChanged.connect(self._on_position_changed)
         self.player.player.durationChanged.connect(self._on_duration_changed)
@@ -646,6 +662,144 @@ class BlossomBridge(QObject):
         code = err.get("code", "UNKNOWN")
         message = err.get("message", "Ошибка импорта")
         self.importFailed.emit(stage, code, message)
+
+    @pyqtSlot(str, str, str, bool)
+    def importFromYoutube(self, url, lyrics, cover_source, upload_to_drive):
+        if self._youtube_import_worker and self._youtube_import_worker.isRunning():
+            self.youtubeImportFailed.emit("pipeline", "IMPORT_BUSY", "Импорт с YouTube уже выполняется")
+            return
+        if upload_to_drive and self.drive.service is None and not os.path.exists(self.drive._token_file()):
+            self.youtubeImportFailed.emit(
+                "drive_auth",
+                "DRIVE_NOT_LOGGED_IN",
+                "Сначала войди в Google Drive или сними галочку загрузки на Drive.",
+            )
+            return
+        self.player.stop()
+        self.youtubeImportStarted.emit(url)
+        self._youtube_import_worker = YoutubeImportWorker(
+            url=url,
+            drive=self.drive,
+            lyrics=lyrics or "",
+            cover_source=cover_source or "",
+            upload_to_drive=bool(upload_to_drive),
+        )
+        self._youtube_import_worker.finished_ok.connect(self._on_youtube_import_ok)
+        self._youtube_import_worker.finished_err.connect(self._on_youtube_import_err)
+        self._youtube_import_worker.progress.connect(lambda msg: self.youtubeImportProgress.emit(msg))
+        self._youtube_import_worker.start()
+
+    def _on_youtube_import_ok(self, payload):
+        all_songs = db.get_all_songs()
+        if payload.get("song_id"):
+            idx = next(
+                (i for i, s in enumerate(all_songs) if s.id == payload["song_id"]),
+                len(all_songs) - 1,
+            )
+            self.player.load_queue(all_songs, max(0, idx))
+            self._update_ui_state()
+        title = payload.get("title_display") or payload.get("title") or "track"
+        if payload.get("duplicate"):
+            title = f"{title} (уже была в библиотеке)"
+        self._emit_library()
+        self.youtubeImportFinished.emit(title)
+
+    def _on_youtube_import_err(self, err):
+        stage = err.get("stage", "pipeline")
+        code = err.get("code", "UNKNOWN")
+        message = err.get("message", "Ошибка импорта с YouTube")
+        self.youtubeImportFailed.emit(stage, code, message)
+
+    @pyqtSlot(str)
+    def importArtistFromSpotify(self, query):
+        if self._artist_import_worker and self._artist_import_worker.isRunning():
+            self.artistImportFailed.emit("Загрузка дискографии уже выполняется")
+            return
+        from .spotify_web_service import get_saved_sp_dc
+        if not get_saved_sp_dc():
+            self.artistImportFailed.emit("Сначала войди в Spotify через «Спотифай автоматически»")
+            return
+        self.player.stop()
+        self._artist_import_worker = ArtistImportWorker(query=query, drive=self.drive)
+        self._artist_import_worker.progress.connect(self.artistImportProgress.emit)
+        self._artist_import_worker.finished_ok.connect(self._on_artist_import_ok)
+        self._artist_import_worker.finished_err.connect(self._on_artist_import_err)
+        self._artist_import_worker.start()
+
+    @pyqtSlot()
+    def stopArtistImport(self):
+        if self._artist_import_worker and self._artist_import_worker.isRunning():
+            self._artist_import_worker.request_stop()
+            self.artistImportProgress.emit("Останавливаю после текущего трека…")
+
+    def _on_artist_import_ok(self, stats: dict):
+        self._reload_queue_keep()
+        self._update_ui_state()
+        self._emit_library()
+        self._emit_playlists()
+        text = (
+            f"«{stats.get('artist_name', '')}»: новых треков {stats.get('imported', 0)}, "
+            f"дублей пропущено {stats.get('skipped', 0)}, ошибок {stats.get('failed', 0)} "
+            f"из {stats.get('total', 0)}"
+        )
+        if stats.get("stopped"):
+            text = "Остановлено. " + text
+        self.artistImportFinished.emit(text)
+
+    def _on_artist_import_err(self, err: dict):
+        stage = err.get("stage", "pipeline")
+        code = err.get("code", "UNKNOWN")
+        message = err.get("message", "Ошибка загрузки дискографии")
+        detail = (err.get("detail") or "").strip()
+        text = f"[{stage}:{code}] {message}"
+        if detail:
+            text += f" — {detail[:300]}"
+        self.artistImportFailed.emit(text)
+
+    @pyqtSlot(str)
+    def importYoutubeChannel(self, url):
+        if self._youtube_channel_worker and self._youtube_channel_worker.isRunning():
+            self.youtubeChannelFailed.emit("Загрузка канала уже выполняется")
+            return
+        self.player.stop()
+        self._youtube_channel_worker = YoutubeChannelWorker(
+            url=url,
+            drive=self.drive,
+            upload_to_drive=bool(self.drive.service),
+        )
+        self._youtube_channel_worker.progress.connect(self.youtubeChannelProgress.emit)
+        self._youtube_channel_worker.finished_ok.connect(self._on_youtube_channel_ok)
+        self._youtube_channel_worker.finished_err.connect(self._on_youtube_channel_err)
+        self._youtube_channel_worker.start()
+
+    @pyqtSlot()
+    def stopYoutubeChannel(self):
+        if self._youtube_channel_worker and self._youtube_channel_worker.isRunning():
+            self._youtube_channel_worker.request_stop()
+            self.youtubeChannelProgress.emit("Останавливаю после текущего видео…")
+
+    def _on_youtube_channel_ok(self, stats: dict):
+        self._reload_queue_keep()
+        self._update_ui_state()
+        self._emit_library()
+        self._emit_playlists()
+        text = (
+            f"Новых треков {stats.get('imported', 0)}, дублей пропущено {stats.get('skipped', 0)}, "
+            f"ошибок {stats.get('failed', 0)} из {stats.get('total', 0)}"
+        )
+        if stats.get("stopped"):
+            text = "Остановлено. " + text
+        self.youtubeChannelFinished.emit(text)
+
+    def _on_youtube_channel_err(self, err: dict):
+        stage = err.get("stage", "pipeline")
+        code = err.get("code", "UNKNOWN")
+        message = err.get("message", "Ошибка загрузки канала")
+        detail = (err.get("detail") or "").strip()
+        text = f"[{stage}:{code}] {message}"
+        if detail:
+            text += f" — {detail[:300]}"
+        self.youtubeChannelFailed.emit(text)
 
     @pyqtSlot()
     def importSpotifyLibrary(self):

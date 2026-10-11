@@ -8,6 +8,7 @@
 
 import json
 import os
+import re
 import shutil
 import sqlite3
 import tempfile
@@ -241,6 +242,124 @@ def _fetch_liked_tracks(login) -> list[dict]:
         if offset >= total or not items:
             break
     return tracks
+
+
+ARTIST_URL_RE = re.compile(
+    r"open\.spotify\.com/(?:intl-[a-z]{2}/)?artist/([A-Za-z0-9]{22})", re.IGNORECASE
+)
+
+
+def extract_artist_id_from_url(url: str) -> str:
+    match = ARTIST_URL_RE.search((url or "").strip())
+    return match.group(1) if match else ""
+
+
+def search_artist_web(login, query: str, limit: int = 5) -> list[dict[str, Any]]:
+    """Ищет артистов по имени, возвращает [{id, name}] по релевантности."""
+    from spotapi import Artist
+
+    try:
+        res = Artist(login).query_artists(query, limit=limit)
+    except Exception as exc:
+        fail(Stage.SPOTIFY_RESOLVE, "SPOTIFY_ARTIST_SEARCH_FAIL", "Не удалось найти артиста", str(exc))
+    items = (((res.get("data") or {}).get("searchV2") or {}).get("artists") or {}).get("items") or []
+    out = []
+    for item in items:
+        data = (item or {}).get("data") or {}
+        uri = data.get("uri") or ""
+        name = ((data.get("profile") or {}).get("name") or "").strip()
+        if uri.startswith("spotify:artist:") and name:
+            out.append({"id": uri.split(":")[-1], "name": name})
+    return out
+
+
+def _release_items(section: Optional[dict]) -> list[dict]:
+    """Извлекает альбомы/синглы из секции дискографии (albums/singles/compilations)."""
+    out: list[dict] = []
+    for item in (section or {}).get("items") or []:
+        for release in ((item.get("releases") or {}).get("items")) or []:
+            if release.get("id"):
+                out.append(release)
+    return out
+
+
+def fetch_artist_discography_web(login, artist_id: str, progress=None) -> dict[str, Any]:
+    """Все треки артиста (альбомы+синглы+сборники), без дублей по track_id.
+
+    Ограничение: берётся первая страница каждой секции дискографии (обычно
+    по 10 альбомов и синглов) — у spotapi нет пагинации для queryArtistOverview.
+    Для подавляющего большинства артистов этого достаточно для полной дискографии.
+    """
+
+    def _notify(msg: str) -> None:
+        if progress:
+            try:
+                progress(msg)
+            except Exception:
+                pass
+
+    from spotapi import Artist, PublicAlbum
+
+    _notify("Читаю карточку артиста…")
+    try:
+        res = Artist(login).get_artist(artist_id)
+    except Exception as exc:
+        fail(Stage.SPOTIFY_RESOLVE, "SPOTIFY_ARTIST_FETCH_FAIL", "Не удалось получить данные артиста", str(exc))
+
+    artist_union = ((res.get("data") or {}).get("artistUnion")) or {}
+    artist_name = ((artist_union.get("profile") or {}).get("name") or "").strip() or "Unknown Artist"
+    discography = artist_union.get("discography") or {}
+
+    albums: dict[str, dict] = {}
+    skipped_more = 0
+    for section_key in ("albums", "singles", "compilations"):
+        section = discography.get(section_key) or {}
+        releases = _release_items(section)
+        total = int(section.get("totalCount") or 0)
+        if total > len(releases):
+            skipped_more += total - len(releases)
+        for release in releases:
+            album_id = release.get("id")
+            if album_id:
+                albums.setdefault(album_id, release)
+
+    if skipped_more:
+        _notify(f"Найдено релизов: {len(albums)} (ещё {skipped_more} не попали в первую страницу)")
+    else:
+        _notify(f"Найдено релизов: {len(albums)}")
+
+    tracks: list[dict[str, Any]] = []
+    seen_track_ids: set[str] = set()
+    for index, (album_id, release) in enumerate(albums.items(), start=1):
+        album_name = (release.get("name") or "").strip() or "Без названия"
+        _notify(f"Альбом {index}/{len(albums)}: {album_name}…")
+        try:
+            info = PublicAlbum(album_id, client=login.client).get_album_info()
+        except Exception:
+            continue
+        album_union = ((info.get("data") or {}).get("albumUnion")) or {}
+        items = ((album_union.get("tracksV2") or {}).get("items")) or []
+        for item in items:
+            track = (item or {}).get("track") or {}
+            uri = track.get("uri") or ""
+            if not uri.startswith("spotify:track:"):
+                continue
+            track_id = uri.split(":")[-1]
+            if not track_id or track_id in seen_track_ids:
+                continue
+            seen_track_ids.add(track_id)
+            artist_names = ", ".join(
+                ((a.get("profile") or {}).get("name") or "").strip()
+                for a in ((track.get("artists") or {}).get("items") or [])
+                if (a.get("profile") or {}).get("name")
+            )
+            tracks.append({
+                "id": track_id,
+                "url": f"https://open.spotify.com/track/{track_id}",
+                "title": (track.get("name") or "").strip() or "Unknown",
+                "artist": artist_names or artist_name,
+            })
+    return {"artist_name": artist_name, "tracks": tracks}
 
 
 def fetch_user_library_web(login, progress=None) -> list[dict[str, Any]]:

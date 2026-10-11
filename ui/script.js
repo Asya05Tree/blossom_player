@@ -174,6 +174,34 @@ function wireBridgeSignals() {
         });
     }
 
+    if (pyBridge.youtubeImportStarted) {
+        pyBridge.youtubeImportStarted.connect(function() {
+            setYoutubeImportStatus("Скачивание… подожди 1–3 мин", false);
+            setYoutubeImportLock(true);
+        });
+    }
+
+    if (pyBridge.youtubeImportFinished) {
+        pyBridge.youtubeImportFinished.connect(function(title) {
+            setYoutubeImportStatus("Готово: " + title, false, true);
+            setYoutubeImportLock(false);
+            if (pyBridge.getLibraryJson) pyBridge.getLibraryJson();
+        });
+    }
+
+    if (pyBridge.youtubeImportFailed) {
+        pyBridge.youtubeImportFailed.connect(function(stage, code, message) {
+            setYoutubeImportStatus("[" + stage + ":" + code + "] " + message, true);
+            setYoutubeImportLock(false);
+        });
+    }
+
+    if (pyBridge.youtubeImportProgress) {
+        pyBridge.youtubeImportProgress.connect(function(msg) {
+            setYoutubeImportStatus(msg, false);
+        });
+    }
+
     if (pyBridge.songForEditReady) {
         pyBridge.songForEditReady.connect(function(json) {
             _populateEditModal(json);
@@ -209,8 +237,8 @@ function onFilePicked(path, kind) {
         const base = path.split(/[/\\]/).pop().replace(/\.[^.]+$/, "");
         const t = document.getElementById("modal-title");
         if (t && !t.value.trim()) t.value = base;
-    } else if (kind === "cover" || kind === "cover_local") {
-        const id = kind === "cover" ? "spotify-cover" : "modal-cover";
+    } else if (kind === "cover" || kind === "cover_local" || kind === "cover_youtube") {
+        const id = kind === "cover" ? "spotify-cover" : kind === "cover_youtube" ? "youtube-cover" : "modal-cover";
         document.getElementById(id).value = path;
     } else if (kind === "cover_edit") {
         document.getElementById("edit-cover-path").value = path;
@@ -558,6 +586,53 @@ function submitSpotifyImport() {
         document.getElementById("spotify-lyrics").value,
         document.getElementById("spotify-cover").value.trim(),
         document.getElementById("spotify-upload-drive").checked
+    );
+}
+
+/* === YouTube Import === */
+
+function setYoutubeImportLock(locked) {
+    var btn = document.getElementById("btn-youtube-import");
+    if (btn) btn.disabled = locked;
+    var ids = ["youtube-url", "youtube-lyrics", "youtube-cover"];
+    ids.forEach(function(id) {
+        var el = document.getElementById(id);
+        if (el) el.readOnly = locked;
+    });
+}
+
+function setYoutubeImportStatus(text, isError, isOk) {
+    const el = document.getElementById("youtube-import-status");
+    if (!el) return;
+    el.innerText = text || "";
+    el.className = "import-status" + (isError ? " error" : isOk ? " ok" : "");
+}
+
+function openYoutubeModal() {
+    document.getElementById("add-menu").classList.add("hidden");
+    document.getElementById("youtube-url").value = "";
+    document.getElementById("youtube-lyrics").value = "";
+    document.getElementById("youtube-cover").value = "";
+    document.getElementById("youtube-modal").style.display = "flex";
+    setYoutubeImportStatus("");
+}
+
+function closeYoutubeModal() {
+    document.getElementById("youtube-modal").style.display = "none";
+}
+
+function submitYoutubeImport() {
+    const url = document.getElementById("youtube-url").value.trim();
+    const isYoutube = /(youtube\.com\/(watch\?v=|shorts\/|embed\/)|youtu\.be\/)/i.test(url);
+    if (!url || !isYoutube) {
+        setYoutubeImportStatus("Нужна ссылка на видео YouTube", true);
+        return;
+    }
+    pyBridge.importFromYoutube(
+        url,
+        document.getElementById("youtube-lyrics").value,
+        document.getElementById("youtube-cover").value.trim(),
+        document.getElementById("youtube-upload-drive").checked
     );
 }
 

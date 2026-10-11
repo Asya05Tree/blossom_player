@@ -7,6 +7,7 @@ class Stage(str, Enum):
     SPOTIFY_AUTH = "spotify_auth"
     SPOTIFY_RESOLVE = "spotify_resolve"
     SPOTIFY_DOWNLOAD = "spotify_download"
+    YOUTUBE_DOWNLOAD = "youtube_download"
     DRIVE_AUTH = "drive_auth"
     DRIVE_FOLDER = "drive_folder"
     DRIVE_UPLOAD = "drive_upload"
