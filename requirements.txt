@@ -9,3 +9,4 @@ google-auth-oauthlib
 google-api-python-client
 Pillow
 spotapi
+easyocr
