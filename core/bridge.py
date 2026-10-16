@@ -159,7 +159,11 @@ class BlossomBridge(QObject):
     def _cover_file_url(self, cover_path: str) -> str:
         if not cover_path or not os.path.isfile(cover_path):
             return ""
-        return "file:///" + os.path.abspath(cover_path).replace("\\", "/")
+        # Имя файла обложки стабильно (cover_<song_id>.jpg) и перезаписывается на месте
+        # при редактировании — без ?v=mtime QWebEngine отдаёт старую картинку из кэша
+        # до перезапуска приложения, хотя сам файл на диске уже новый.
+        mtime = int(os.path.getmtime(cover_path))
+        return "file:///" + os.path.abspath(cover_path).replace("\\", "/") + f"?v={mtime}"
 
     def _emit_library(self):
         items = []

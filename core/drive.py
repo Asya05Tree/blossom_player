@@ -123,6 +123,15 @@ class BlossomDriveManager:
             fail(Stage.DRIVE_UPLOAD, f"{code}_EMPTY", "Локальный файл пустой", local_path)
 
     def login(self, pick_account: bool = False) -> bool:
+        # Уже залогинены (service реально проверен при входе/try_silent_login) —
+        # не долбим Drive API заново на КАЖДЫЙ импортируемый трек: раньше login()
+        # безусловно пересоздавал service и переразрешал все подпапки через
+        # отдельные files().list() запросы на каждый вызов, что при нестабильной
+        # сети пользователя (см. memory spotify-api-blocked) иногда ловило
+        # транзиентную ошибку Drive API именно в момент скачивания нового трека.
+        if self.service is not None and not pick_account:
+            return True
+
         creds = None
         token_file = self._token_file()
         credentials_file = self._credentials_file()

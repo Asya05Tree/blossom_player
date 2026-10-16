@@ -1,12 +1,20 @@
+from typing import Optional
+
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from . import database as db
 from .blossom_error import BlossomError
 from .drive import BlossomDriveManager
+from .import_pipeline import import_spotify_track_safe
 from .mic_record_util import record_clip, record_loopback_clip
 from .shazam_util import identify_from_file
+from .spotify_web_service import search_track_web
 from .youtube_downloader import search_youtube_top_result
 from .youtube_import_pipeline import import_youtube_track_safe
+
+
+def _normalize(text: str) -> str:
+    return "".join(ch for ch in (text or "").lower() if ch.isalnum())
 
 
 class ShazamWorker(QThread):
@@ -84,6 +92,11 @@ class ShazamWorker(QThread):
                 "artist_display": existing.artist if existing else artist,
             }
 
+        self.progress.emit("Ищу на Spotify…")
+        spotify_result = self._try_spotify_import(title, artist)
+        if spotify_result is not None:
+            return spotify_result
+
         self.progress.emit("Ищу и скачиваю с YouTube…")
         hit = search_youtube_top_result(f"{artist} {title}")
         return import_youtube_track_safe(
@@ -95,3 +108,39 @@ class ShazamWorker(QThread):
             auto_artist_playlist=True,
             progress_callback=lambda msg: self.progress.emit(msg),
         )
+
+    def _try_spotify_import(self, title: str, artist: str) -> Optional[dict]:
+        """Пробует найти и скачать трек на Spotify (лучшие метаданные/обложка,
+        тот же spotdl-пайплайн). Возвращает None при любой неудаче, чтобы
+        вызывающий код тихо упал обратно на YouTube — это дополнительный
+        источник, а не замена гарантированного YouTube-фоллбэка.
+        """
+        try:
+            hits = search_track_web(f"{artist} {title}")
+        except Exception:
+            return None
+        match = self._pick_spotify_match(hits, title, artist)
+        if not match:
+            return None
+        self.progress.emit(f"Нашёл на Spotify: {match['artist']} — {match['title']}")
+        result = import_spotify_track_safe(
+            match["url"],
+            self.drive,
+            upload_to_drive=bool(self.drive.service),
+            auto_artist_playlist=True,
+            progress_callback=lambda msg: self.progress.emit(msg),
+        )
+        return result if result.get("ok") else None
+
+    @staticmethod
+    def _pick_spotify_match(hits: list, title: str, artist: str) -> Optional[dict]:
+        want_title = _normalize(title)
+        want_artist = _normalize(artist)
+        for hit in hits:
+            got_title = _normalize(hit.get("title"))
+            got_artist = _normalize(hit.get("artist"))
+            title_ok = want_title and (want_title in got_title or got_title in want_title)
+            artist_ok = not want_artist or want_artist in got_artist or got_artist in want_artist
+            if title_ok and artist_ok:
+                return hit
+        return None

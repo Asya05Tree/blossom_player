@@ -31,16 +31,21 @@
             <button type="button" class="btn-text" onclick="openDuplicatesModal()">Дубли</button>
             <button type="button" class="btn-text" onclick="toggleLibrary()">Скрыть</button>
         </div>
-        <select id="library-sort" class="cozy-input library-sort-select" onchange="onLibrarySortChange()">
-            <option value="title_asc">Название (А-Я)</option>
-            <option value="title_desc">Название (Я-А)</option>
-            <option value="artist_asc">Артист (А-Я)</option>
-            <option value="added_desc">Сначала новые</option>
-            <option value="added_asc">Сначала старые</option>
-        </select>
-        <div id="song-list" class="song-list"></div>
-        <div class="playlist-block">
-            <h3>Плейлисты</h3>
+        <div class="library-tabs">
+            <button type="button" id="lib-tab-btn-songs" class="library-tab-btn active" onclick="switchLibraryTab('songs')">Треки</button>
+            <button type="button" id="lib-tab-btn-playlists" class="library-tab-btn" onclick="switchLibraryTab('playlists')">Плейлисты</button>
+        </div>
+        <div id="library-tab-songs" class="library-tab-pane">
+            <select id="library-sort" class="cozy-input library-sort-select" onchange="onLibrarySortChange()">
+                <option value="title_asc">Название (А-Я)</option>
+                <option value="title_desc">Название (Я-А)</option>
+                <option value="artist_asc">Артист (А-Я)</option>
+                <option value="added_desc">Сначала новые</option>
+                <option value="added_asc">Сначала старые</option>
+            </select>
+            <div id="song-list" class="song-list"></div>
+        </div>
+        <div id="library-tab-playlists" class="library-tab-pane hidden">
             <div class="file-row">
                 <input type="text" id="new-playlist-name" class="cozy-input" placeholder="Название плейлиста">
                 <button type="button" class="btn-modal btn-secondary" onclick="createPlaylist()">+</button>
@@ -315,6 +320,7 @@
             <div id="duplicates-list" class="spotify-auto-log" style="max-height:320px"></div>
             <div class="modal-actions">
                 <button type="button" id="btn-duplicates-scan" class="btn-modal btn-primary" onclick="startDuplicatesScan()">Искать дубли</button>
+                <button type="button" id="btn-duplicates-auto" class="btn-modal btn-secondary" onclick="autoResolveAllDuplicates()" disabled title="В каждой группе останется трек с наибольшим размером файла">Удалить все автоматически</button>
                 <button type="button" id="btn-duplicates-stop" class="btn-modal btn-ghost" onclick="stopDuplicatesScan()" disabled>Остановить</button>
                 <button type="button" class="btn-modal btn-ghost" onclick="closeDuplicatesModal()">Закрыть</button>
             </div>

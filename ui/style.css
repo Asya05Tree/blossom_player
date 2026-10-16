@@ -142,6 +142,42 @@ body {
     padding: 4px 6px;
 }
 
+.library-tabs {
+    display: flex;
+    gap: 6px;
+}
+
+.library-tab-btn {
+    flex: 1;
+    border: none;
+    background: rgba(255, 255, 255, 0.5);
+    color: #9a86a4;
+    border-radius: 8px;
+    padding: 7px 0;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+}
+
+.library-tab-btn.active {
+    background: #ede7f6;
+    color: #6c5b7b;
+}
+
+.library-tab-pane {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    overflow: hidden;
+}
+
+.library-tab-pane.hidden {
+    display: none;
+}
+
 .btn-text {
     border: none;
     background: transparent;
@@ -217,17 +253,12 @@ body {
     flex: 0 0 auto;
 }
 
-.playlist-block h3 {
-    font-size: 13px;
-    color: #7e57c2;
-    margin-bottom: 6px;
-}
-
 .playlist-list {
     display: flex;
     flex-direction: column;
     gap: 6px;
-    max-height: 120px;
+    flex: 1;
+    min-height: 0;
     overflow-y: auto;
 }
 

@@ -648,6 +648,17 @@ function toggleLibrary() {
     }
 }
 
+function switchLibraryTab(tab) {
+    var panes = { songs: "library-tab-songs", playlists: "library-tab-playlists" };
+    var btns = { songs: "lib-tab-btn-songs", playlists: "lib-tab-btn-playlists" };
+    Object.keys(panes).forEach(function(key) {
+        var pane = document.getElementById(panes[key]);
+        var btn = document.getElementById(btns[key]);
+        if (pane) pane.classList.toggle("hidden", key !== tab);
+        if (btn) btn.classList.toggle("active", key === tab);
+    });
+}
+
 function openEditModal(songId) {
     selectedSongId = songId;
     if (pyBridge.requestSongForEdit) {
@@ -1284,6 +1295,7 @@ function submitTrim() {
 /* === Duplicate finder (by audio fingerprint) === */
 
 var duplicatesScanRunning = false;
+var lastDuplicateGroups = [];
 
 function openDuplicatesModal() {
     document.getElementById("duplicates-modal").style.display = "flex";
@@ -1304,14 +1316,17 @@ function setDuplicatesLock(locked) {
     duplicatesScanRunning = locked;
     var startBtn = document.getElementById("btn-duplicates-scan");
     var stopBtn = document.getElementById("btn-duplicates-stop");
+    var autoBtn = document.getElementById("btn-duplicates-auto");
     if (startBtn) startBtn.disabled = locked;
     if (stopBtn) stopBtn.disabled = !locked;
+    if (autoBtn) autoBtn.disabled = locked || !lastDuplicateGroups.length;
 }
 
 function startDuplicatesScan() {
     if (!pyBridge || !pyBridge.findDuplicates) return;
     if (duplicatesScanRunning) return;
     document.getElementById("duplicates-list").innerHTML = "";
+    lastDuplicateGroups = [];
     setDuplicatesStatus("Запускаю поиск…");
     setDuplicatesLock(true);
     pyBridge.findDuplicates();
@@ -1319,6 +1334,32 @@ function startDuplicatesScan() {
 
 function stopDuplicatesScan() {
     if (pyBridge && pyBridge.stopDuplicateScan) pyBridge.stopDuplicateScan();
+}
+
+function autoResolveAllDuplicates() {
+    if (!pyBridge || !lastDuplicateGroups.length) return;
+    var totalToDelete = 0;
+    var totalGroups = 0;
+    var plan = lastDuplicateGroups.map(function(group) {
+        if (!group.songs || group.songs.length < 2) return [];
+        totalGroups += 1;
+        var keepId = group.songs.reduce(function(best, s) {
+            return (!best || (s.filesize || 0) > (best.filesize || 0)) ? s : best;
+        }, null).id;
+        var toDelete = group.songs.filter(function(s) { return s.id !== keepId; }).map(function(s) { return s.id; });
+        totalToDelete += toDelete.length;
+        return toDelete;
+    });
+    if (!totalToDelete) return;
+    if (!confirm(
+        "Удалить " + totalToDelete + " лишних копий в " + totalGroups + " группах? " +
+        "В каждой группе останется одна песня (с наибольшим размером файла)."
+    )) return;
+    plan.forEach(function(ids) { ids.forEach(function(id) { pyBridge.deleteSongById(id); }); });
+    document.getElementById("duplicates-list").innerHTML = "<p style='font-size:12px;color:#9a86a4'>Готово — лишние копии удалены.</p>";
+    lastDuplicateGroups = [];
+    var autoBtn = document.getElementById("btn-duplicates-auto");
+    if (autoBtn) autoBtn.disabled = true;
 }
 
 function _formatFilesize(bytes) {
@@ -1330,6 +1371,9 @@ function _formatFilesize(bytes) {
 function renderDuplicateGroups(groups) {
     var list = document.getElementById("duplicates-list");
     list.innerHTML = "";
+    lastDuplicateGroups = groups || [];
+    var autoBtn = document.getElementById("btn-duplicates-auto");
+    if (autoBtn) autoBtn.disabled = duplicatesScanRunning || !lastDuplicateGroups.length;
     if (!groups.length) {
         list.innerHTML = "<p style='font-size:12px;color:#9a86a4'>Дублей не найдено.</p>";
         return;
@@ -1369,6 +1413,7 @@ function renderDuplicateGroups(groups) {
             if (!toDelete.length) return;
             if (!confirm("Удалить " + toDelete.length + " лишних копий, оставить одну?")) return;
             toDelete.forEach(function(id) { pyBridge.deleteSongById(id); });
+            groups[gIndex] = { songs: [] };
             if (block) block.remove();
         };
     });

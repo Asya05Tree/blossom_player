@@ -273,6 +273,28 @@ def search_artist_web(login, query: str, limit: int = 5) -> list[dict[str, Any]]
     return out
 
 
+def search_track_web(query: str, limit: int = 5) -> list[dict[str, Any]]:
+    """Ищет треки по тексту (например "артист название"), без входа в Spotify —
+    используется, когда нужно просто НАЙТИ трек (Shazam fallback), а не читать
+    приватную библиотеку. Возвращает [{id, url, title, artist}, ...].
+    """
+    from spotapi import Public
+
+    try:
+        chunk = next(Public.song_search(query))
+    except StopIteration:
+        return []
+    except Exception as exc:
+        fail(Stage.SPOTIFY_RESOLVE, "SPOTIFY_TRACK_SEARCH_FAIL", "Не удалось найти трек на Spotify", str(exc))
+
+    out: list[dict[str, Any]] = []
+    for item in chunk[:limit]:
+        entry = _track_entry_from_web((item.get("item") or {}).get("data"))
+        if entry:
+            out.append(entry)
+    return out
+
+
 def _release_items(section: Optional[dict]) -> list[dict]:
     """Извлекает альбомы/синглы из секции дискографии (albums/singles/compilations)."""
     out: list[dict] = []
