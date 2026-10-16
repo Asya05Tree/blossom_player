@@ -15,6 +15,7 @@ class YoutubeChannelWorker(QThread):
     """Скачивает аудио из всех видео канала/плейлиста YouTube (до CHANNEL_VIDEO_LIMIT штук)."""
 
     progress = pyqtSignal(str)
+    track_imported = pyqtSignal()
     finished_ok = pyqtSignal(dict)
     finished_err = pyqtSignal(dict)
 
@@ -72,6 +73,7 @@ class YoutubeChannelWorker(QThread):
                     skipped += 1
                 else:
                     imported += 1
+                self.track_imported.emit()
             else:
                 error = result.get("error") or {}
                 self.progress.emit(f"[{done}/{total}] Не получилось: {label} ({error.get('code', 'ERR')})")

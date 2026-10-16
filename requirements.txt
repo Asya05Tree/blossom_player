@@ -11,6 +11,7 @@ Pillow
 spotapi
 easyocr
 sounddevice
+PyAudioWPatch  # Windows-only WASAPI loopback — Shazam "звук компьютера" (core/mic_record_util.py)
 
 # Shazam-распознавание (core/shazam_util.py) — НЕ ставится просто через requirements.txt:
 # shazamio==0.8.1 жёстко требует shazamio-core==1.1.2, а у той версии нет готового

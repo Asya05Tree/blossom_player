@@ -15,7 +15,7 @@ from .spotify_library_worker import SpotifyLibraryWorker
 from .youtube_import_worker import YoutubeImportWorker
 from .artist_import_worker import ArtistImportWorker
 from .youtube_channel_worker import YoutubeChannelWorker
-from .instrumental_worker import InstrumentalWorker
+from .instrumental_worker import InstrumentalSearchWorker, InstrumentalDownloadWorker
 from .duplicate_finder_worker import DuplicateFinderWorker
 from .blossom_error import BlossomError
 from .trim_util import trim_audio
@@ -58,6 +58,7 @@ class BlossomBridge(QObject):
     youtubeChannelFailed = pyqtSignal(str)
     instrumentalStarted = pyqtSignal(int)
     instrumentalProgress = pyqtSignal(str)
+    instrumentalFound = pyqtSignal(str)
     instrumentalFinished = pyqtSignal(str)
     instrumentalFailed = pyqtSignal(str)
     duplicatesScanProgress = pyqtSignal(str)
@@ -88,7 +89,8 @@ class BlossomBridge(QObject):
         self._youtube_import_worker = None
         self._artist_import_worker = None
         self._youtube_channel_worker = None
-        self._instrumental_worker = None
+        self._instrumental_search_worker = None
+        self._instrumental_download_worker = None
         self._duplicate_finder_worker = None
         self._ocr_worker = None
         self._text_search_worker = None
@@ -140,6 +142,7 @@ class BlossomBridge(QObject):
                 "artist_raw": self._strip_decor(song.artist),
                 "cover": self._cover_file_url(song.cover_path or ""),
                 "filepath": song.filepath,
+                "added_at": song.added_at or 0,
             })
         self.libraryUpdated.emit(json.dumps(items, ensure_ascii=False))
 
@@ -446,6 +449,7 @@ class BlossomBridge(QObject):
                 "artist_raw": self._strip_decor(song.artist),
                 "cover": self._cover_file_url(song.cover_path or ""),
                 "filepath": song.filepath,
+                "added_at": song.added_at or 0,
             })
         return json.dumps(items, ensure_ascii=False)
 
@@ -757,6 +761,7 @@ class BlossomBridge(QObject):
         self.player.stop()
         self._artist_import_worker = ArtistImportWorker(query=query, drive=self.drive)
         self._artist_import_worker.progress.connect(self.artistImportProgress.emit)
+        self._artist_import_worker.track_imported.connect(self._emit_library)
         self._artist_import_worker.finished_ok.connect(self._on_artist_import_ok)
         self._artist_import_worker.finished_err.connect(self._on_artist_import_err)
         self._artist_import_worker.start()
@@ -803,6 +808,7 @@ class BlossomBridge(QObject):
             upload_to_drive=bool(self.drive.service),
         )
         self._youtube_channel_worker.progress.connect(self.youtubeChannelProgress.emit)
+        self._youtube_channel_worker.track_imported.connect(self._emit_library)
         self._youtube_channel_worker.finished_ok.connect(self._on_youtube_channel_ok)
         self._youtube_channel_worker.finished_err.connect(self._on_youtube_channel_err)
         self._youtube_channel_worker.start()
@@ -838,22 +844,41 @@ class BlossomBridge(QObject):
 
     @pyqtSlot(int)
     def findInstrumental(self, song_id):
-        if self._instrumental_worker and self._instrumental_worker.isRunning():
+        """Только ищет инструментал на YouTube — ничего не скачивает.
+        Найденное уходит в instrumentalFound, пользователь подтверждает скачивание
+        отдельным вызовом downloadInstrumental (можно сперва открыть и прослушать)."""
+        if self._instrumental_search_worker and self._instrumental_search_worker.isRunning():
             self.instrumentalFailed.emit("Поиск инструментала уже выполняется")
             return
         self.instrumentalStarted.emit(song_id)
-        self._instrumental_worker = InstrumentalWorker(
+        self._instrumental_search_worker = InstrumentalSearchWorker(song_id=song_id)
+        self._instrumental_search_worker.progress.connect(self.instrumentalProgress.emit)
+        self._instrumental_search_worker.finished_ok.connect(self._on_instrumental_found)
+        self._instrumental_search_worker.finished_err.connect(self._on_instrumental_err)
+        self._instrumental_search_worker.start()
+
+    def _on_instrumental_found(self, payload: dict):
+        self.instrumentalFound.emit(json.dumps(payload, ensure_ascii=False))
+
+    @pyqtSlot(int, str)
+    def downloadInstrumental(self, song_id, video_url):
+        if self._instrumental_download_worker and self._instrumental_download_worker.isRunning():
+            self.instrumentalFailed.emit("Скачивание инструментала уже выполняется")
+            return
+        self._instrumental_download_worker = InstrumentalDownloadWorker(
             song_id=song_id,
+            video_url=video_url,
             drive=self.drive,
             upload_to_drive=bool(self.drive.service),
         )
-        self._instrumental_worker.progress.connect(self.instrumentalProgress.emit)
-        self._instrumental_worker.finished_ok.connect(self._on_instrumental_ok)
-        self._instrumental_worker.finished_err.connect(self._on_instrumental_err)
-        self._instrumental_worker.start()
+        self._instrumental_download_worker.progress.connect(self.instrumentalProgress.emit)
+        self._instrumental_download_worker.finished_ok.connect(self._on_instrumental_ok)
+        self._instrumental_download_worker.finished_err.connect(self._on_instrumental_err)
+        self._instrumental_download_worker.start()
 
     def _on_instrumental_ok(self, payload):
         self._emit_library()
+        self._emit_playlists()
         title = payload.get("title_display") or payload.get("title") or "track"
         if payload.get("duplicate"):
             title = f"{title} (уже была в библиотеке)"
@@ -930,15 +955,15 @@ class BlossomBridge(QObject):
         message = err.get("message", "Не удалось скачать")
         self.textSearchFailed.emit(f"[{stage}:{code}] {message}")
 
-    @pyqtSlot(float)
-    def startShazamListen(self, listen_seconds):
-        self._start_shazam(audio_path="", listen_seconds=listen_seconds or 8.0)
+    @pyqtSlot(float, str)
+    def startShazamListen(self, listen_seconds, source="mic"):
+        self._start_shazam(audio_path="", listen_seconds=listen_seconds or 8.0, source=source or "mic")
 
     @pyqtSlot(str)
     def identifyFromAudioFile(self, audio_path):
-        self._start_shazam(audio_path=audio_path, listen_seconds=0)
+        self._start_shazam(audio_path=audio_path, listen_seconds=0, source="mic")
 
-    def _start_shazam(self, audio_path: str, listen_seconds: float):
+    def _start_shazam(self, audio_path: str, listen_seconds: float, source: str = "mic"):
         if self._shazam_worker and self._shazam_worker.isRunning():
             self.shazamFailed.emit("Распознавание уже выполняется")
             return
@@ -947,6 +972,7 @@ class BlossomBridge(QObject):
             drive=self.drive,
             audio_path=audio_path,
             listen_seconds=listen_seconds,
+            source=source,
         )
         self._shazam_worker.progress.connect(self.shazamProgress.emit)
         self._shazam_worker.finished_ok.connect(self._on_shazam_ok)

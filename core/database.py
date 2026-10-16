@@ -1,5 +1,6 @@
 import os
 import sqlite3
+import time
 from typing import List, Optional
 from .models import Song, Playlist
 
@@ -58,6 +59,10 @@ def init_db():
         cursor.execute("ALTER TABLE songs ADD COLUMN fingerprint TEXT")
     except Exception:
         pass
+    try:
+        cursor.execute("ALTER TABLE songs ADD COLUMN added_at INTEGER")
+    except Exception:
+        pass
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS playlists (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -81,11 +86,11 @@ def add_song(song: Song) -> int:
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute('''
-        INSERT INTO songs (title, artist, filepath, cover_path, lyrics, video_link, drive_file_id, drive_cover_id, drive_lyrics_id, drive_meta_id, spotify_track_id, youtube_video_id, fingerprint)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO songs (title, artist, filepath, cover_path, lyrics, video_link, drive_file_id, drive_cover_id, drive_lyrics_id, drive_meta_id, spotify_track_id, youtube_video_id, fingerprint, added_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ''', (song.title, song.artist, song.filepath, song.cover_path, song.lyrics, song.video_link,
           song.drive_file_id, song.drive_cover_id, song.drive_lyrics_id, song.drive_meta_id,
-          song.spotify_track_id, song.youtube_video_id, song.fingerprint))
+          song.spotify_track_id, song.youtube_video_id, song.fingerprint, song.added_at or int(time.time())))
     conn.commit()
     song_id = cursor.lastrowid
     conn.close()
@@ -108,6 +113,7 @@ def _row_to_song(row) -> Song:
         spotify_track_id=_get("spotify_track_id"),
         youtube_video_id=_get("youtube_video_id"),
         fingerprint=_get("fingerprint"),
+        added_at=_get("added_at"),
     )
 
 

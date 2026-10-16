@@ -1,7 +1,7 @@
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from .blossom_error import BlossomError
-from .ocr_util import recognize_text
+from .ocr_util import extract_title_candidates, recognize_text
 
 
 class OcrWorker(QThread):
@@ -16,7 +16,8 @@ class OcrWorker(QThread):
     def run(self):
         try:
             lines = recognize_text(self.image_path, self.lang)
-            self.finished_ok.emit(lines)
+            candidates = extract_title_candidates(lines)
+            self.finished_ok.emit(candidates)
         except BlossomError as exc:
             self.finished_err.emit(exc.to_dict())
         except Exception as exc:

@@ -19,6 +19,7 @@ class ArtistImportWorker(QThread):
     """Скачивает всю дискографию артиста Spotify (по ссылке или имени) на устройство/Drive."""
 
     progress = pyqtSignal(str)
+    track_imported = pyqtSignal()
     finished_ok = pyqtSignal(dict)
     finished_err = pyqtSignal(dict)
 
@@ -85,6 +86,8 @@ class ArtistImportWorker(QThread):
                 failed += 1
             if song_id and playlist_id:
                 db.add_song_to_playlist(playlist_id, song_id)
+            if song_id:
+                self.track_imported.emit()
 
         return {
             "artist_name": artist_name,

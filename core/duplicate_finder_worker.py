@@ -1,3 +1,6 @@
+import os
+import re
+
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from . import database as db
@@ -12,7 +15,15 @@ from .text_style import strip_decor
 
 # Сравниваем отпечатки только у треков с похожей длительностью — иначе
 # пришлось бы попарно сравнивать всю библиотеку (O(n²) на тысячах треков).
-DURATION_TOLERANCE_SECONDS = 3.0
+# Сужено с 3.0: нам нужны настоящие повторные копии одного и того же файла,
+# а не просто похожие по звуку треки с чуть разной длиной.
+DURATION_TOLERANCE_SECONDS = 2.0
+
+_INSTRUMENTAL_RE = re.compile(r"instrumental|инструментал", re.IGNORECASE)
+
+
+def _is_instrumental_title(title: str) -> bool:
+    return bool(_INSTRUMENTAL_RE.search(title or ""))
 
 
 class DuplicateFinderWorker(QThread):
@@ -90,9 +101,16 @@ class DuplicateFinderWorker(QThread):
             if self._stop_requested:
                 break
             song_i, dur_i = candidates[i]
+            instr_i = _is_instrumental_title(song_i.title)
             j = i + 1
             while j < n and candidates[j][1] - dur_i <= DURATION_TOLERANCE_SECONDS:
                 song_j, _ = candidates[j]
+                # Инструментал и обычная версия никогда не дубликаты друг друга,
+                # даже если звуковой отпечаток совпал (общая подложка) — это
+                # разные треки по смыслу, а не два файла одной записи.
+                if instr_i != _is_instrumental_title(song_j.title):
+                    j += 1
+                    continue
                 sim = fingerprint_similarity(song_i.fingerprint, song_j.fingerprint)
                 if sim >= self.threshold:
                     union(i, j)
@@ -114,8 +132,17 @@ class DuplicateFinderWorker(QThread):
                             "title_raw": strip_decor(s.title),
                             "artist_raw": strip_decor(s.artist),
                             "filepath": s.filepath,
+                            "filesize": self._safe_filesize(s.filepath),
+                            "is_instrumental": _is_instrumental_title(s.title),
                         }
                         for s in members
                     ]
                 })
         return groups
+
+    @staticmethod
+    def _safe_filesize(filepath: str) -> int:
+        try:
+            return os.path.getsize(filepath) if filepath and os.path.isfile(filepath) else 0
+        except OSError:
+            return 0

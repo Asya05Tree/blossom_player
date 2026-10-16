@@ -1,6 +1,7 @@
 import os
 import re
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 from mutagen.easyid3 import EasyID3
 from mutagen.id3 import ID3NoHeaderError
@@ -42,7 +43,14 @@ def download_youtube_audio(url: str) -> dict[str, Any]:
     outtmpl = os.path.join(DOWNLOADS_DIR, f"yt_{video_id}.%(ext)s")
     ffmpeg_dir = os.path.dirname(resolve_ffmpeg())
     ydl_opts = {
-        "format": "bestaudio/best",
+        # "bestaudio" — чистый аудио-поток, если он есть. Антибот-обход через
+        # player_client: android иногда вообще не отдаёт отдельный аудио-поток —
+        # тогда остаётся только комбинированный видео+аудио. В этом случае раньше
+        # стоял "/best" — самый ТЯЖЁЛЫЙ (вплоть до 1080p) комбинированный поток,
+        # хотя видео всё равно потом выбрасывается ffmpeg'ом. "/worst" — тот же
+        # фоллбэк, но самый лёгкий по видео комбинированный поток, какой есть —
+        # меньше лишнего трафика и быстрее скачивание.
+        "format": "bestaudio/worst",
         "outtmpl": outtmpl,
         "ffmpeg_location": ffmpeg_dir,
         "postprocessors": [{
@@ -120,6 +128,8 @@ def search_youtube_top_result(query: str) -> dict[str, Any]:
         "id": video_id,
         "title": (top.get("title") or "").strip(),
         "url": top.get("url") or f"https://www.youtube.com/watch?v={video_id}",
+        "duration": top.get("duration") or 0,
+        "channel": (top.get("channel") or top.get("uploader") or "").strip(),
     }
 
 
@@ -132,8 +142,16 @@ def list_channel_or_playlist_videos(url: str, limit: int = 50) -> dict[str, Any]
     target = (url or "").strip()
     if not target:
         fail(Stage.YOUTUBE_DOWNLOAD, "YOUTUBE_CHANNEL_URL_EMPTY", "Нужна ссылка на канал или плейлист")
-    if "list=" not in target and "/videos" not in target and "/playlists" not in target:
-        target = target.rstrip("/") + "/videos"
+    # Ссылки часто приходят с трекинговыми параметрами (?si=...&drli=1, в т.ч. с
+    # music.youtube.com) — раньше "/videos" дописывался ПОСЛЕ query-строки и ломал
+    # URL (…?si=xxx/videos). Разбираем URL и дописываем /videos только к пути,
+    # отбрасывая query/fragment — они не нужны для получения списка видео.
+    parts = urlsplit(target)
+    path = parts.path
+    has_playlist_param = "list=" in parts.query
+    if not has_playlist_param and "/videos" not in path and "/playlists" not in path:
+        path = path.rstrip("/") + "/videos"
+    target = urlunsplit((parts.scheme, parts.netloc, path, parts.query if has_playlist_param else "", ""))
 
     ydl_opts = {
         "quiet": True,

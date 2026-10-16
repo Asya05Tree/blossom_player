@@ -3,7 +3,7 @@ from PyQt6.QtCore import QThread, pyqtSignal
 from . import database as db
 from .blossom_error import BlossomError
 from .drive import BlossomDriveManager
-from .mic_record_util import record_clip
+from .mic_record_util import record_clip, record_loopback_clip
 from .shazam_util import identify_from_file
 from .youtube_downloader import search_youtube_top_result
 from .youtube_import_pipeline import import_youtube_track_safe
@@ -18,11 +18,18 @@ class ShazamWorker(QThread):
     finished_err = pyqtSignal(dict)
     progress = pyqtSignal(str)
 
-    def __init__(self, drive: BlossomDriveManager, audio_path: str = "", listen_seconds: float = 8.0):
+    def __init__(
+        self,
+        drive: BlossomDriveManager,
+        audio_path: str = "",
+        listen_seconds: float = 8.0,
+        source: str = "mic",
+    ):
         super().__init__()
         self.drive = drive
         self.audio_path = (audio_path or "").strip()
         self.listen_seconds = listen_seconds
+        self.source = source or "mic"
 
     def run(self):
         try:
@@ -44,8 +51,12 @@ class ShazamWorker(QThread):
     def _identify_and_import(self) -> dict:
         clip_path = self.audio_path
         if not clip_path:
-            self.progress.emit(f"Слушаю {int(self.listen_seconds)} сек…")
-            clip_path = record_clip(self.listen_seconds)
+            if self.source == "loopback":
+                self.progress.emit(f"Слушаю звук компьютера {int(self.listen_seconds)} сек…")
+                clip_path = record_loopback_clip(self.listen_seconds)
+            else:
+                self.progress.emit(f"Слушаю микрофон {int(self.listen_seconds)} сек…")
+                clip_path = record_clip(self.listen_seconds)
 
         self.progress.emit("Узнаю трек через Shazam…")
         match = identify_from_file(clip_path)

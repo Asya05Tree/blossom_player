@@ -18,7 +18,9 @@ FPCALC_LENGTH_SECONDS = 120
 COMPARE_PREFIX = 400
 MAX_ALIGN_OFFSET = 60  # ~секунд сдвига (на случай обрезанного начала)
 MAX_BIT_ERROR = 2
-DEFAULT_DUPLICATE_THRESHOLD = 0.4
+# 0.4 ловил "похоже" (например, инструментал и вокальную версию с общей
+# подложкой) — для кнопки удаления дублей нужно "это тот же файл", почти 1:1.
+DEFAULT_DUPLICATE_THRESHOLD = 0.92
 
 
 def resolve_fpcalc() -> str:

@@ -42,6 +42,12 @@ def get_spotdl_client():
             "ffmpeg": ffmpeg_path,
             "print_errors": True,
             "log_level": "INFO",
+            # spotdl по умолчанию качает через yt-dlp с форматом "bestaudio/best" —
+            # "/best" может утащить тяжёлый комбинированный видео+аудио поток, если
+            # для трека на YouTube не нашлось чистого audio-only. Меняем фоллбэк на
+            # "worst" (минимально возможное по весу видео, если без него никак) —
+            # то же решение, что для прямых YouTube-ссылок в youtube_downloader.py.
+            "yt_dlp_args": "-f bestaudio/worst",
         },
     )
     return _spotdl_instance

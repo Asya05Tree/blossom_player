@@ -4,6 +4,7 @@ easyocr группирует языки по совместимым набора
 и японский в одном Reader, поэтому держим отдельный закэшированный Reader
 на каждый поддерживаемый язык (плюс английский, который сочетается с любым).
 """
+import re
 from typing import Any
 
 from .blossom_error import Stage, fail
@@ -50,3 +51,43 @@ def recognize_text(image_path: str, lang: str = DEFAULT_LANG) -> list[str]:
         if text and conf >= MIN_CONFIDENCE:
             lines.append(text)
     return lines
+
+
+_SEPARATOR_RE = re.compile(r"\s*[-–—:|]\s*")
+# Подряд идущие латинские слова внутри строки — ловит английское название трека,
+# затерявшееся посреди кириллического (или любого другого) текста, которое
+# иначе никогда не стало бы отдельным кандидатом на скачивание.
+_LATIN_RUN_RE = re.compile(r"[A-Za-z][A-Za-z0-9 .,'&!-]*[A-Za-z0-9]")
+_MIN_CANDIDATE_LEN = 3
+
+
+def extract_title_candidates(lines: list[str]) -> list[dict[str, Any]]:
+    """Из распознанных строк достаёт более узких кандидатов на "название трека":
+    части строки по разделителям ("Артист - Название") и отдельные латинские
+    куски внутри строк на другом языке. Исходные строки не теряются — только
+    дополняются. Возвращает [{"text": str, "is_line": bool}, ...] без дублей.
+    """
+    seen: set[str] = set()
+    out: list[dict[str, Any]] = []
+
+    def _add(text: str, is_line: bool) -> None:
+        cleaned = " ".join((text or "").split())
+        key = cleaned.lower()
+        if len(cleaned) < _MIN_CANDIDATE_LEN or key in seen:
+            return
+        seen.add(key)
+        out.append({"text": cleaned, "is_line": is_line})
+
+    for line in lines:
+        _add(line, True)
+
+    for line in lines:
+        for part in _SEPARATOR_RE.split(line):
+            if part.strip() and part.strip() != line.strip():
+                _add(part, False)
+        for match in _LATIN_RUN_RE.finditer(line):
+            candidate = match.group(0).strip()
+            if candidate and candidate != line.strip():
+                _add(candidate, False)
+
+    return out

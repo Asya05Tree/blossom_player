@@ -85,8 +85,8 @@ body {
 }
 
 .library-panel {
-    width: 280px;
-    min-width: 280px;
+    width: 420px;
+    min-width: 420px;
     border-right: 1px solid rgba(255, 255, 255, 0.6);
     background: rgba(255, 255, 255, 0.35);
     display: flex;
@@ -134,6 +134,12 @@ body {
 .library-head h2 {
     font-size: 16px;
     color: #5c4b6a;
+}
+
+.library-sort-select {
+    width: 100%;
+    font-size: 12px;
+    padding: 4px 6px;
 }
 
 .btn-text {
@@ -193,8 +199,11 @@ body {
 
 .song-item-actions {
     display: flex;
-    flex-direction: column;
+    flex-direction: row;
+    flex-wrap: wrap;
+    justify-content: flex-end;
     gap: 4px;
+    max-width: 150px;
 }
 
 .song-item-actions button {
@@ -205,6 +214,7 @@ body {
     padding: 4px 8px;
     font-size: 10px;
     cursor: pointer;
+    flex: 0 0 auto;
 }
 
 .playlist-block h3 {
@@ -545,6 +555,48 @@ body {
 
 .toast.hidden {
     display: none;
+}
+
+.busy-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(74, 62, 86, 0.35);
+    backdrop-filter: blur(2px);
+    z-index: 20000;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    cursor: wait;
+}
+
+.busy-overlay.hidden {
+    display: none;
+}
+
+.busy-spinner {
+    width: 48px;
+    height: 48px;
+    border: 4px solid rgba(255, 255, 255, 0.5);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: busy-spin 0.8s linear infinite;
+}
+
+@keyframes busy-spin {
+    to { transform: rotate(360deg); }
+}
+
+.busy-overlay-text {
+    margin-top: 16px;
+    font-size: 14px;
+    color: #fff;
+    max-width: 70%;
+    text-align: center;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
 }
 
 .slider {
@@ -890,14 +942,24 @@ body {
 .duplicate-row {
     display: flex;
     align-items: center;
-    justify-content: space-between;
     gap: 8px;
     padding: 4px 0;
     font-size: 12px;
+    cursor: pointer;
 }
 
 .duplicate-row button {
     flex-shrink: 0;
+}
+
+.btn-dup-resolve {
+    margin-top: 6px;
+}
+
+.ocr-candidate-row {
+    padding-left: 16px;
+    color: #9a86a4;
+    font-style: italic;
 }
 
 .pv-song-row {

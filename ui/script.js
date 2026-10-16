@@ -10,6 +10,10 @@ var driveLoggedIn = false;
 document.addEventListener("DOMContentLoaded", function() {
     var savedVideo = localStorage.getItem("blossom_video_bg");
     setVideoSource(savedVideo || "bg.webm");
+    var sortSelect = document.getElementById("library-sort");
+    if (sortSelect) {
+        sortSelect.value = localStorage.getItem("blossom_library_sort") || "title_asc";
+    }
     new QWebChannel(qt.webChannelTransport, function(channel) {
         pyBridge = channel.objects.pyBridge;
         wireBridgeSignals();
@@ -126,6 +130,7 @@ function wireBridgeSignals() {
         pyBridge.importStarted.connect(function() {
             setImportStatus("Скачивание… подожди 1–5 мин", false);
             setImportLock(true);
+            showBusyOverlay("import", "Скачиваю трек со Spotify…");
         });
     }
 
@@ -133,6 +138,7 @@ function wireBridgeSignals() {
         pyBridge.importFinished.connect(function(title) {
             setImportStatus("Готово: " + title, false, true);
             setImportLock(false);
+            hideBusyOverlay("import");
             if (pyBridge.getLibraryJson) pyBridge.getLibraryJson();
         });
     }
@@ -141,12 +147,14 @@ function wireBridgeSignals() {
         pyBridge.importFailed.connect(function(stage, code, message) {
             setImportStatus("[" + stage + ":" + code + "] " + message, true);
             setImportLock(false);
+            hideBusyOverlay("import");
         });
     }
 
     if (pyBridge.importProgress) {
         pyBridge.importProgress.connect(function(msg) {
             setImportStatus(msg, false);
+            updateBusyOverlay(msg);
         });
     }
 
@@ -154,6 +162,7 @@ function wireBridgeSignals() {
         pyBridge.spotifyAutoProgress.connect(function(msg) {
             appendSpotifyAutoLog(msg);
             setSpotifyAutoStatus(msg, false);
+            showBusyOverlay("spotifyAuto", msg);
         });
     }
 
@@ -162,6 +171,7 @@ function wireBridgeSignals() {
             appendSpotifyAutoLog(msg);
             setSpotifyAutoStatus(msg, false, true);
             setSpotifyAutoLock(false);
+            hideBusyOverlay("spotifyAuto");
             if (pyBridge.getLibraryJson) pyBridge.getLibraryJson();
         });
     }
@@ -171,6 +181,7 @@ function wireBridgeSignals() {
             appendSpotifyAutoLog(msg);
             setSpotifyAutoStatus(msg, true);
             setSpotifyAutoLock(false);
+            hideBusyOverlay("spotifyAuto");
         });
     }
 
@@ -178,6 +189,7 @@ function wireBridgeSignals() {
         pyBridge.youtubeImportStarted.connect(function() {
             setYoutubeImportStatus("Скачивание… подожди 1–3 мин", false);
             setYoutubeImportLock(true);
+            showBusyOverlay("youtubeImport", "Скачиваю трек с YouTube…");
         });
     }
 
@@ -185,6 +197,7 @@ function wireBridgeSignals() {
         pyBridge.youtubeImportFinished.connect(function(title) {
             setYoutubeImportStatus("Готово: " + title, false, true);
             setYoutubeImportLock(false);
+            hideBusyOverlay("youtubeImport");
             if (pyBridge.getLibraryJson) pyBridge.getLibraryJson();
         });
     }
@@ -193,12 +206,14 @@ function wireBridgeSignals() {
         pyBridge.youtubeImportFailed.connect(function(stage, code, message) {
             setYoutubeImportStatus("[" + stage + ":" + code + "] " + message, true);
             setYoutubeImportLock(false);
+            hideBusyOverlay("youtubeImport");
         });
     }
 
     if (pyBridge.youtubeImportProgress) {
         pyBridge.youtubeImportProgress.connect(function(msg) {
             setYoutubeImportStatus(msg, false);
+            updateBusyOverlay(msg);
         });
     }
 
@@ -206,6 +221,7 @@ function wireBridgeSignals() {
         pyBridge.artistImportProgress.connect(function(msg) {
             appendArtistImportLog(msg);
             setArtistImportStatus(msg, false);
+            showBusyOverlay("artistImport", msg);
         });
     }
 
@@ -214,6 +230,7 @@ function wireBridgeSignals() {
             appendArtistImportLog(msg);
             setArtistImportStatus(msg, false, true);
             setArtistImportLock(false);
+            hideBusyOverlay("artistImport");
             if (pyBridge.getLibraryJson) pyBridge.getLibraryJson();
         });
     }
@@ -223,6 +240,7 @@ function wireBridgeSignals() {
             appendArtistImportLog(msg);
             setArtistImportStatus(msg, true);
             setArtistImportLock(false);
+            hideBusyOverlay("artistImport");
         });
     }
 
@@ -230,6 +248,7 @@ function wireBridgeSignals() {
         pyBridge.youtubeChannelProgress.connect(function(msg) {
             appendYoutubeChannelLog(msg);
             setYoutubeChannelStatus(msg, false);
+            showBusyOverlay("youtubeChannel", msg);
         });
     }
 
@@ -238,6 +257,7 @@ function wireBridgeSignals() {
             appendYoutubeChannelLog(msg);
             setYoutubeChannelStatus(msg, false, true);
             setYoutubeChannelLock(false);
+            hideBusyOverlay("youtubeChannel");
             if (pyBridge.getLibraryJson) pyBridge.getLibraryJson();
         });
     }
@@ -247,31 +267,47 @@ function wireBridgeSignals() {
             appendYoutubeChannelLog(msg);
             setYoutubeChannelStatus(msg, true);
             setYoutubeChannelLock(false);
+            hideBusyOverlay("youtubeChannel");
         });
     }
 
     if (pyBridge.instrumentalStarted) {
         pyBridge.instrumentalStarted.connect(function() {
             showToast("Ищу инструментал на YouTube…", false);
+            showBusyOverlay("instrumental", "Ищу инструментал на YouTube…");
         });
     }
 
     if (pyBridge.instrumentalProgress) {
         pyBridge.instrumentalProgress.connect(function(msg) {
             showToast(msg, false);
+            updateBusyOverlay(msg);
+        });
+    }
+
+    if (pyBridge.instrumentalFound) {
+        pyBridge.instrumentalFound.connect(function(json) {
+            _unlockInstrumentalButtons();
+            hideBusyOverlay("instrumental");
+            openInstrumentalConfirm(json);
         });
     }
 
     if (pyBridge.instrumentalFinished) {
         pyBridge.instrumentalFinished.connect(function(title) {
-            showToast("Инструментал добавлен: " + title, false);
+            closeInstrumentalConfirm();
+            showToast("Инструментал добавлен в «Инструменталы»: " + title, false);
+            hideBusyOverlay("instrumental");
             if (pyBridge.getLibraryJson) pyBridge.getLibraryJson();
         });
     }
 
     if (pyBridge.instrumentalFailed) {
         pyBridge.instrumentalFailed.connect(function(msg) {
+            _unlockInstrumentalButtons();
+            closeInstrumentalConfirm();
             showToast(msg, true);
+            hideBusyOverlay("instrumental");
             if (pyBridge.getLibraryJson) pyBridge.getLibraryJson();
         });
     }
@@ -279,12 +315,14 @@ function wireBridgeSignals() {
     if (pyBridge.duplicatesScanProgress) {
         pyBridge.duplicatesScanProgress.connect(function(msg) {
             setDuplicatesStatus(msg, false);
+            showBusyOverlay("duplicatesScan", msg);
         });
     }
 
     if (pyBridge.duplicatesScanFinished) {
         pyBridge.duplicatesScanFinished.connect(function(json) {
             setDuplicatesLock(false);
+            hideBusyOverlay("duplicatesScan");
             var groups = [];
             try { groups = JSON.parse(json); } catch (e) { groups = []; }
             setDuplicatesStatus("Найдено групп дублей: " + groups.length, false, true);
@@ -296,18 +334,21 @@ function wireBridgeSignals() {
         pyBridge.duplicatesScanFailed.connect(function(msg) {
             setDuplicatesStatus(msg, true);
             setDuplicatesLock(false);
+            hideBusyOverlay("duplicatesScan");
         });
     }
 
     if (pyBridge.shazamStarted) {
         pyBridge.shazamStarted.connect(function() {
             setShazamLock(true);
+            showBusyOverlay("shazam", "Распознаю трек…");
         });
     }
 
     if (pyBridge.shazamProgress) {
         pyBridge.shazamProgress.connect(function(msg) {
             setShazamStatus(msg, false);
+            updateBusyOverlay(msg);
         });
     }
 
@@ -315,6 +356,7 @@ function wireBridgeSignals() {
         pyBridge.shazamFinished.connect(function(title) {
             setShazamStatus("Готово: " + title, false, true);
             setShazamLock(false);
+            hideBusyOverlay("shazam");
             if (pyBridge.getLibraryJson) pyBridge.getLibraryJson();
         });
     }
@@ -323,6 +365,7 @@ function wireBridgeSignals() {
         pyBridge.shazamFailed.connect(function(msg) {
             setShazamStatus(msg, true);
             setShazamLock(false);
+            hideBusyOverlay("shazam");
         });
     }
 
@@ -330,6 +373,7 @@ function wireBridgeSignals() {
         pyBridge.ocrFinished.connect(function(lines) {
             document.getElementById("btn-ocr-run").disabled = false;
             setOcrStatus("Готово. Выбери строку, которую скачать.", false, true);
+            hideBusyOverlay("ocr");
             renderOcrResults(lines || []);
         });
     }
@@ -338,24 +382,28 @@ function wireBridgeSignals() {
         pyBridge.ocrFailed.connect(function(msg) {
             document.getElementById("btn-ocr-run").disabled = false;
             setOcrStatus(msg, true);
+            hideBusyOverlay("ocr");
         });
     }
 
     if (pyBridge.textSearchStarted) {
         pyBridge.textSearchStarted.connect(function() {
             showToast("Ищу на YouTube…", false);
+            showBusyOverlay("textSearch", "Ищу на YouTube…");
         });
     }
 
     if (pyBridge.textSearchProgress) {
         pyBridge.textSearchProgress.connect(function(msg) {
             showToast(msg, false);
+            updateBusyOverlay(msg);
         });
     }
 
     if (pyBridge.textSearchFinished) {
         pyBridge.textSearchFinished.connect(function(title) {
             showToast("Добавлено: " + title, false);
+            hideBusyOverlay("textSearch");
             if (pyBridge.getLibraryJson) pyBridge.getLibraryJson();
         });
     }
@@ -363,6 +411,7 @@ function wireBridgeSignals() {
     if (pyBridge.textSearchFailed) {
         pyBridge.textSearchFailed.connect(function(msg) {
             showToast(msg, true);
+            hideBusyOverlay("textSearch");
         });
     }
 
@@ -383,6 +432,31 @@ function resolveCoverSrc(cover) {
     if (!cover) return "../assets/default_cover.png";
     if (cover.startsWith("file:///")) return cover;
     return cover;
+}
+
+/* === Единый оверлей "идёт долгая операция" (скачивание/распознавание/поиск дублей) ===
+   Несколько операций разных типов теоретически могут идти параллельно — поэтому
+   набор активных имён, а не просто счётчик: оверлей прячется только когда все ушли. */
+var _busyOps = new Set();
+
+function showBusyOverlay(opName, text) {
+    _busyOps.add(opName);
+    var el = document.getElementById("busy-overlay");
+    if (el) el.classList.remove("hidden");
+    updateBusyOverlay(text);
+}
+
+function updateBusyOverlay(text) {
+    var t = document.getElementById("busy-overlay-text");
+    if (t) t.textContent = text || "";
+}
+
+function hideBusyOverlay(opName) {
+    _busyOps.delete(opName);
+    if (_busyOps.size === 0) {
+        var el = document.getElementById("busy-overlay");
+        if (el) el.classList.add("hidden");
+    }
 }
 
 function showToast(msg, isError) {
@@ -422,6 +496,41 @@ function pickFile(kind) {
     if (pyBridge && pyBridge.pickFile) pyBridge.pickFile(kind);
 }
 
+function getLibrarySortMode() {
+    var sel = document.getElementById("library-sort");
+    return (sel && sel.value) || localStorage.getItem("blossom_library_sort") || "title_asc";
+}
+
+function sortLibrarySongs(songs, mode) {
+    var collator = function(a, b) { return String(a || "").localeCompare(String(b || ""), "ru"); };
+    var sorted = songs.slice();
+    switch (mode) {
+        case "title_desc":
+            sorted.sort(function(a, b) { return collator(b.title_raw || b.title, a.title_raw || a.title); });
+            break;
+        case "artist_asc":
+            sorted.sort(function(a, b) { return collator(a.artist_raw || a.artist, b.artist_raw || b.artist) || collator(a.title_raw || a.title, b.title_raw || b.title); });
+            break;
+        case "added_desc":
+            sorted.sort(function(a, b) { return (b.added_at || 0) - (a.added_at || 0); });
+            break;
+        case "added_asc":
+            sorted.sort(function(a, b) { return (a.added_at || 0) - (b.added_at || 0); });
+            break;
+        case "title_asc":
+        default:
+            sorted.sort(function(a, b) { return collator(a.title_raw || a.title, b.title_raw || b.title); });
+            break;
+    }
+    return sorted;
+}
+
+function onLibrarySortChange() {
+    var sel = document.getElementById("library-sort");
+    if (sel) localStorage.setItem("blossom_library_sort", sel.value);
+    renderLibrary(librarySongs);
+}
+
 function renderLibrary(json) {
     try {
         librarySongs = typeof json === "string" ? JSON.parse(json) : json;
@@ -431,11 +540,12 @@ function renderLibrary(json) {
     const list = document.getElementById("song-list");
     if (!list) return;
     list.innerHTML = "";
+    const sortedSongs = sortLibrarySongs(librarySongs, getLibrarySortMode());
     if (!librarySongs.length) {
         list.innerHTML = "<p style='font-size:12px;color:#9a86a4;padding:8px'>Пока нет треков</p>";
         return;
     }
-    librarySongs.forEach(function(s) {
+    sortedSongs.forEach(function(s) {
         const row = document.createElement("div");
         row.className = "song-item";
         const cover = s.cover || "../assets/default_cover.png";
@@ -1028,9 +1138,13 @@ function setShazamLock(locked) {
 function startShazamListen() {
     if (!pyBridge || !pyBridge.startShazamListen) return;
     const seconds = parseFloat(document.getElementById("shazam-seconds").value) || 8;
+    const sourceEl = document.getElementById("shazam-source");
+    const source = (sourceEl && sourceEl.value) || "mic";
     setShazamLock(true);
-    setShazamStatus("Слушаю " + seconds + " сек…");
-    pyBridge.startShazamListen(seconds);
+    setShazamStatus(
+        (source === "loopback" ? "Слушаю звук компьютера " : "Слушаю микрофон ") + seconds + " сек…"
+    );
+    pyBridge.startShazamListen(seconds, source);
 }
 
 /* === OCR: recognize song name from an image === */
@@ -1064,32 +1178,82 @@ function submitOcr() {
     document.getElementById("ocr-results").innerHTML = "";
     setOcrStatus("Распознаю…");
     document.getElementById("btn-ocr-run").disabled = true;
+    showBusyOverlay("ocr", "Распознаю текст на картинке…");
     pyBridge.recognizeImageText(path, lang);
 }
 
-function renderOcrResults(lines) {
+function renderOcrResults(items) {
     var list = document.getElementById("ocr-results");
     list.innerHTML = "";
-    if (!lines.length) {
+    if (!items.length) {
         list.innerHTML = "<p style='font-size:12px;color:#9a86a4'>Текст не распознан.</p>";
         return;
     }
-    lines.forEach(function(line) {
+    items.forEach(function(item) {
+        // Поддержка и старого формата (просто строки), и нового ({text, is_line}).
+        var text = (typeof item === "string") ? item : item.text;
+        var isLine = (typeof item === "string") ? true : item.is_line;
         var row = document.createElement("div");
-        row.className = "duplicate-row";
+        row.className = "duplicate-row" + (isLine ? "" : " ocr-candidate-row");
         var span = document.createElement("span");
-        span.innerText = line;
+        span.innerText = text;
         var btn = document.createElement("button");
         btn.type = "button";
         btn.innerText = "Скачать";
         btn.onclick = function() {
             btn.disabled = true;
-            pyBridge.downloadFromText(line);
+            pyBridge.downloadFromText(text);
         };
         row.appendChild(span);
         row.appendChild(btn);
         list.appendChild(row);
     });
+}
+
+/* === Инструментал: подтверждение перед скачиванием === */
+var instrumentalFoundData = null;
+
+function _unlockInstrumentalButtons() {
+    document.querySelectorAll("[data-instr]").forEach(function(b) { b.disabled = false; });
+}
+
+function _formatDuration(seconds) {
+    seconds = parseInt(seconds) || 0;
+    var m = Math.floor(seconds / 60), s = seconds % 60;
+    return m + ":" + (s < 10 ? "0" : "") + s;
+}
+
+function openInstrumentalConfirm(json) {
+    try {
+        instrumentalFoundData = typeof json === "string" ? JSON.parse(json) : json;
+    } catch (e) {
+        return;
+    }
+    var d = instrumentalFoundData;
+    document.getElementById("instr-confirm-title").textContent = d.video_title || "";
+    var meta = [];
+    if (d.video_channel) meta.push(d.video_channel);
+    if (d.video_duration) meta.push(_formatDuration(d.video_duration));
+    document.getElementById("instr-confirm-meta").textContent = meta.join(" · ");
+    document.getElementById("instrumental-confirm-modal").style.display = "flex";
+}
+
+function closeInstrumentalConfirm() {
+    document.getElementById("instrumental-confirm-modal").style.display = "none";
+    instrumentalFoundData = null;
+}
+
+function openInstrumentalOnYoutube() {
+    if (instrumentalFoundData && instrumentalFoundData.video_url) {
+        window.open(instrumentalFoundData.video_url, "_blank");
+    }
+}
+
+function confirmInstrumentalDownload() {
+    if (!instrumentalFoundData || !pyBridge || !pyBridge.downloadInstrumental) return;
+    pyBridge.downloadInstrumental(instrumentalFoundData.song_id, instrumentalFoundData.video_url);
+    showToast("Скачиваю инструментал…", false);
+    closeInstrumentalConfirm();
 }
 
 /* === Trim start/end === */
@@ -1157,6 +1321,12 @@ function stopDuplicatesScan() {
     if (pyBridge && pyBridge.stopDuplicateScan) pyBridge.stopDuplicateScan();
 }
 
+function _formatFilesize(bytes) {
+    if (!bytes) return "";
+    var mb = bytes / (1024 * 1024);
+    return mb >= 0.1 ? mb.toFixed(1) + " МБ" : Math.round(bytes / 1024) + " КБ";
+}
+
 function renderDuplicateGroups(groups) {
     var list = document.getElementById("duplicates-list");
     list.innerHTML = "";
@@ -1168,23 +1338,38 @@ function renderDuplicateGroups(groups) {
         var block = document.createElement("div");
         block.className = "duplicate-group";
         block.setAttribute("data-group", gIndex);
-        var html = "<div style='font-size:12px;color:#9a86a4;margin:6px 0 2px'>Похожие треки:</div>";
+        // По умолчанию оставляем трек с наибольшим размером файла (вероятно лучшее качество).
+        var keepId = group.songs.reduce(function(best, s) {
+            return (!best || (s.filesize || 0) > (best.filesize || 0)) ? s : best;
+        }, null).id;
+        var kind = (group.songs[0] && group.songs[0].is_instrumental) ? "инструментала" : "трека";
+        var html = "<div style='font-size:12px;color:#9a86a4;margin:6px 0 2px'>" +
+            "Дубликаты одного " + kind + " (" + group.songs.length + ") — выберите, какой оставить:</div>";
         group.songs.forEach(function(s) {
-            html += "<div class='duplicate-row' data-song-row='" + s.id + "'>" +
-                "<span>" + escapeHtml(s.artist_raw || s.artist) + " — " + escapeHtml(s.title_raw || s.title) + "</span>" +
-                "<button type='button' data-dup-del='" + s.id + "'>Удалить</button>" +
-                "</div>";
+            html += "<label class='duplicate-row' data-song-row='" + s.id + "'>" +
+                "<span><input type='radio' name='dupkeep-" + gIndex + "' value='" + s.id + "'" +
+                (s.id === keepId ? " checked" : "") + "> " +
+                escapeHtml(s.artist_raw || s.artist) + " — " + escapeHtml(s.title_raw || s.title) +
+                " <span style='color:#b3a1bd'>(" + _formatFilesize(s.filesize) + ")</span></span>" +
+                "</label>";
         });
+        html += "<button type='button' class='btn-dup-resolve' data-group-resolve='" + gIndex + "'>Удалить лишние</button>";
         block.innerHTML = html;
         list.appendChild(block);
     });
-    list.querySelectorAll("[data-dup-del]").forEach(function(btn) {
+    list.querySelectorAll("[data-group-resolve]").forEach(function(btn) {
         btn.onclick = function() {
-            var id = parseInt(btn.getAttribute("data-dup-del"));
-            if (!confirm("Удалить этот трек?")) return;
-            pyBridge.deleteSongById(id);
-            var row = list.querySelector("[data-song-row='" + id + "']");
-            if (row) row.remove();
+            var gIndex = parseInt(btn.getAttribute("data-group-resolve"));
+            var group = groups[gIndex];
+            var block = list.querySelector("[data-group='" + gIndex + "']");
+            var checked = block.querySelector("input[name='dupkeep-" + gIndex + "']:checked");
+            if (!checked) return;
+            var keepId = parseInt(checked.value);
+            var toDelete = group.songs.filter(function(s) { return s.id !== keepId; }).map(function(s) { return s.id; });
+            if (!toDelete.length) return;
+            if (!confirm("Удалить " + toDelete.length + " лишних копий, оставить одну?")) return;
+            toDelete.forEach(function(id) { pyBridge.deleteSongById(id); });
+            if (block) block.remove();
         };
     });
 }

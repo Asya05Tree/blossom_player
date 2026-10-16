@@ -31,6 +31,13 @@
             <button type="button" class="btn-text" onclick="openDuplicatesModal()">Дубли</button>
             <button type="button" class="btn-text" onclick="toggleLibrary()">Скрыть</button>
         </div>
+        <select id="library-sort" class="cozy-input library-sort-select" onchange="onLibrarySortChange()">
+            <option value="title_asc">Название (А-Я)</option>
+            <option value="title_desc">Название (Я-А)</option>
+            <option value="artist_asc">Артист (А-Я)</option>
+            <option value="added_desc">Сначала новые</option>
+            <option value="added_asc">Сначала старые</option>
+        </select>
         <div id="song-list" class="song-list"></div>
         <div class="playlist-block">
             <h3>Плейлисты</h3>
@@ -108,6 +115,11 @@
         </div>
     </div>
     <div id="toast" class="toast hidden"></div>
+
+    <div id="busy-overlay" class="busy-overlay hidden">
+        <div class="busy-spinner"></div>
+        <div id="busy-overlay-text" class="busy-overlay-text"></div>
+    </div>
 
     <div id="cloud-modal" class="modal-overlay" style="display: none;">
         <div class="modal-card modal-card-wide">
@@ -213,6 +225,11 @@
                 готовый аудио/видео файл с записью песни. Если трека нет в библиотеке,
                 он автоматически скачается с YouTube.
             </p>
+            <label style="font-size:12px;color:#6d5c7e">Откуда слушать</label>
+            <select id="shazam-source" class="cozy-input">
+                <option value="mic">Микрофон</option>
+                <option value="loopback">Звук компьютера (то, что сейчас играет)</option>
+            </select>
             <label style="font-size:12px;color:#6d5c7e">Слушать сколько секунд</label>
             <input type="number" id="shazam-seconds" class="cozy-input" min="4" max="20" step="1" value="8">
             <p id="shazam-status" class="import-status"></p>
@@ -266,6 +283,22 @@
             <div class="modal-actions">
                 <button type="button" class="btn-modal btn-primary" onclick="submitTrim()">Обрезать</button>
                 <button type="button" class="btn-modal btn-ghost" onclick="closeTrimModal()">Отмена</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="instrumental-confirm-modal" class="modal-overlay" style="display: none;">
+        <div class="modal-card">
+            <h3 class="modal-title">Нашла инструментал</h3>
+            <p style="font-size:14px;color:#4a3e56;margin:0;font-weight:600" id="instr-confirm-title"></p>
+            <p style="font-size:12px;color:#9a86a4;margin:0" id="instr-confirm-meta"></p>
+            <p style="font-size:12px;color:#9a86a4;margin:0">
+                Можно сначала прослушать на YouTube, прежде чем скачивать.
+            </p>
+            <div class="modal-actions">
+                <button type="button" class="btn-modal btn-ghost" onclick="openInstrumentalOnYoutube()">Открыть на YouTube</button>
+                <button type="button" class="btn-modal btn-primary" onclick="confirmInstrumentalDownload()">Скачать</button>
+                <button type="button" class="btn-modal btn-ghost" onclick="closeInstrumentalConfirm()">Отмена</button>
             </div>
         </div>
     </div>
