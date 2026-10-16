@@ -112,6 +112,7 @@ class InstrumentalDownloadWorker(QThread):
             title_override=f"{title} (Instrumental)",
             artist_override=artist,
             upload_to_drive=self.upload_to_drive,
+            auto_artist_playlist=True,
             progress_callback=lambda msg: self.progress.emit(msg),
         )
         if result.get("ok") and result.get("song_id"):

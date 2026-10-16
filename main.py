@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 
 
 def _relaunch_in_venv_if_needed() -> None:
@@ -15,7 +16,7 @@ def _relaunch_in_venv_if_needed() -> None:
 
 _relaunch_in_venv_if_needed()
 
-from PyQt6.QtCore import QUrl
+from PyQt6.QtCore import QUrl, QTimer
 from PyQt6.QtWidgets import QApplication, QMainWindow
 from PyQt6.QtWebEngineCore import QWebEngineSettings
 from PyQt6.QtWebEngineWidgets import QWebEngineView
@@ -26,11 +27,17 @@ from core.player import BlossomPlayer
 from core.drive import BlossomDriveManager
 from core.bridge import BlossomBridge
 
+MAX_CLOSE_WAIT_SECONDS = 20
+
+
 class BlossomWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Blossom Player 🌸")
-        self.resize(1100, 720) 
+        self.resize(1100, 720)
+        self._closing = False
+        self._close_wait_started = 0.0
+        self._close_poll_timer = None
 
         project_dir = os.path.dirname(os.path.abspath(__file__))
         icon_path = os.path.join(project_dir, "assets", "icon.png")
@@ -64,7 +71,6 @@ class BlossomWindow(QMainWindow):
         self.load_initial_library()
 
     def load_initial_library(self):
-        from PyQt6.QtCore import QTimer
         songs = db.get_all_songs()
         if songs:
             self.player.load_queue(songs, 0)
@@ -74,6 +80,35 @@ class BlossomWindow(QMainWindow):
             self.bridge._emit_playlists()
 
         self.browser.loadFinished.connect(lambda: QTimer.singleShot(300, on_ready))
+
+    def closeEvent(self, event):
+        if self._closing:
+            event.accept()
+            return
+        if not self.bridge.has_active_jobs():
+            event.accept()
+            return
+        event.ignore()
+        self._closing = True
+        self._close_wait_started = time.time()
+        try:
+            self.browser.page().runJavaScript(
+                "if (typeof showBusyOverlay === 'function') "
+                "showBusyOverlay('closing', 'Останавливаю активные задачи перед закрытием…');"
+            )
+        except Exception:
+            pass
+        self.bridge.stop_all_jobs()
+        self._close_poll_timer = QTimer(self)
+        self._close_poll_timer.timeout.connect(self._check_close_ready)
+        self._close_poll_timer.start(300)
+
+    def _check_close_ready(self):
+        elapsed = time.time() - self._close_wait_started
+        if not self.bridge.has_active_jobs() or elapsed > MAX_CLOSE_WAIT_SECONDS:
+            if self._close_poll_timer:
+                self._close_poll_timer.stop()
+            self.close()
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

@@ -43,6 +43,30 @@ def download_cover_from_url(url: str, target_path: str) -> str:
     return target_path
 
 
+def ensure_artist_playlist(artist_name: str) -> "int | None":
+    """Плейлист с именем артиста — создаёт при первом треке этого артиста,
+    дальше переиспользует. Используется только при добавлении ОДНОГО трека
+    (ссылка, Shazam, OCR, инструментал) — массовые импортёры (вся дискография,
+    весь канал) делают себе отдельный плейлист-партию сами и сюда не заходят,
+    иначе получилось бы два почти одинаковых плейлиста на один прогон.
+    """
+    from . import database as db
+    from .models import Playlist
+    from .text_style import wrap_title
+
+    clean = (artist_name or "").strip()
+    if not clean:
+        return None
+    existing = db.get_playlist_by_name(clean)
+    if existing:
+        return existing.id
+    try:
+        display = wrap_title(clean)
+    except Exception:
+        display = clean
+    return db.add_playlist(Playlist(name=display))
+
+
 def save_lyrics_local(song_id: int, lyrics: str) -> str:
     ensure_asset_dirs()
     path = os.path.join(LYRICS_DIR, f"lyrics_{song_id}.txt")

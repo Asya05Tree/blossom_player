@@ -48,5 +48,6 @@ class TextSearchDownloadWorker(QThread):
             hit["url"],
             self.drive,
             upload_to_drive=self.upload_to_drive,
+            auto_artist_playlist=True,
             progress_callback=lambda msg: self.progress.emit(msg),
         )

@@ -47,6 +47,7 @@ class SpotifyImportWorker(QThread):
                 video_link=self.video_link,
                 upload_to_drive=self.upload_to_drive,
                 save_to_db=self.save_to_db,
+                auto_artist_playlist=True,
                 progress_callback=lambda msg: self.progress.emit(msg),
             )
             if result.get("ok"):

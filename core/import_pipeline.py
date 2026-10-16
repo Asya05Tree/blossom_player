@@ -13,9 +13,18 @@ from .spotify_service import resolve_track_metadata
 from .text_style import wrap_artist, wrap_title
 from .import_common import (
     download_cover_from_url as _download_cover_from_url,
+    ensure_artist_playlist as _ensure_artist_playlist,
     safe_filename as _safe_filename,
     save_lyrics_local as _save_lyrics_local,
 )
+
+
+def _add_to_artist_playlist(song_id: Optional[int], artist_name: str) -> None:
+    if not song_id:
+        return
+    playlist_id = _ensure_artist_playlist(artist_name)
+    if playlist_id:
+        db.add_song_to_playlist(playlist_id, song_id)
 
 
 def import_spotify_track(
@@ -27,6 +36,7 @@ def import_spotify_track(
     video_link: str = "",
     upload_to_drive: bool = True,
     save_to_db: bool = True,
+    auto_artist_playlist: bool = False,
     progress_callback=None,
 ) -> dict[str, Any]:
     def _progress(msg):
@@ -53,6 +63,8 @@ def import_spotify_track(
         if existing_id:
             existing = db.get_song(existing_id)
             _progress("Трек уже есть в библиотеке — дубликат не добавлен")
+            if auto_artist_playlist:
+                _add_to_artist_playlist(existing_id, meta.get("artist") or (existing.artist if existing else ""))
             return {
                 "ok": True,
                 "duplicate": True,
@@ -113,6 +125,8 @@ def import_spotify_track(
             spotify_track_id=(downloaded.get("track_id") or meta.get("track_id") or None),
         )
         song_id = db.add_song(song)
+        if auto_artist_playlist:
+            _add_to_artist_playlist(song_id, downloaded["artist"])
 
         cover_seed = (cover_source or "").strip()
         if not cover_seed and meta.get("cover_url"):

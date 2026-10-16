@@ -101,6 +101,36 @@ class BlossomBridge(QObject):
         self.player.player.mediaStatusChanged.connect(self._on_media_status_changed)
         self._last_duration = 0
 
+    _JOB_WORKER_ATTRS = (
+        "_drive_verify_worker", "_drive_login_worker", "_sync_worker", "_drive_upload_worker",
+        "_import_worker", "_youtube_import_worker", "_artist_import_worker", "_youtube_channel_worker",
+        "_instrumental_search_worker", "_instrumental_download_worker", "_ocr_worker",
+        "_text_search_worker", "_shazam_worker", "_duplicate_finder_worker", "_spotify_library_worker",
+    )
+
+    def _active_jobs(self) -> list:
+        workers = []
+        for name in self._JOB_WORKER_ATTRS:
+            worker = getattr(self, name, None)
+            if worker is not None and worker.isRunning():
+                workers.append(worker)
+        return workers
+
+    def has_active_jobs(self) -> bool:
+        """Используется при закрытии окна (main.py) — нельзя закрываться, пока идёт скачивание/анализ."""
+        return bool(self._active_jobs())
+
+    def stop_all_jobs(self) -> None:
+        """Просит все активные фоновые потоки остановиться (после текущего элемента —
+        у кого есть такая поддержка). Не ждёт завершения — за ожиданием следит вызывающий."""
+        for worker in self._active_jobs():
+            stop = getattr(worker, "request_stop", None)
+            if callable(stop):
+                try:
+                    stop()
+                except Exception:
+                    pass
+
     def _on_position_changed(self, position: int):
         self.positionChanged.emit(position, self._last_duration)
 

@@ -5,12 +5,20 @@ from . import database as db
 from .blossom_error import BlossomError, Stage, fail
 from .covers import save_and_resize_cover
 from .drive import BlossomDriveManager
-from .import_common import download_cover_from_url, safe_filename, save_lyrics_local
+from .import_common import download_cover_from_url, ensure_artist_playlist, safe_filename, save_lyrics_local
 from .log_util import log
 from .models import Song
 from .paths import COVERS_DIR
 from .text_style import wrap_artist, wrap_title
 from .youtube_downloader import download_youtube_audio
+
+
+def _add_to_artist_playlist(song_id, artist_name: str) -> None:
+    if not song_id:
+        return
+    playlist_id = ensure_artist_playlist(artist_name)
+    if playlist_id:
+        db.add_song_to_playlist(playlist_id, song_id)
 
 
 def import_youtube_track(
@@ -22,6 +30,7 @@ def import_youtube_track(
     title_override: str = "",
     artist_override: str = "",
     upload_to_drive: bool = True,
+    auto_artist_playlist: bool = False,
     progress_callback=None,
 ) -> dict[str, Any]:
     def _progress(msg):
@@ -43,6 +52,8 @@ def import_youtube_track(
     if existing_id:
         existing = db.get_song(existing_id)
         _progress("Это видео уже есть в библиотеке — дубликат не добавлен")
+        if auto_artist_playlist:
+            _add_to_artist_playlist(existing_id, artist_override or (existing.artist if existing else ""))
         return {
             "ok": True,
             "duplicate": True,
@@ -63,6 +74,8 @@ def import_youtube_track(
         db.set_song_youtube_id(dup_by_name, video_id)
         existing = db.get_song(dup_by_name)
         _progress("Такой трек уже есть в библиотеке — дубликат не добавлен")
+        if auto_artist_playlist:
+            _add_to_artist_playlist(dup_by_name, raw_artist)
         return {
             "ok": True,
             "duplicate": True,
@@ -108,6 +121,8 @@ def import_youtube_track(
         youtube_video_id=video_id,
     )
     song_id = db.add_song(song)
+    if auto_artist_playlist:
+        _add_to_artist_playlist(song_id, raw_artist)
 
     cover_seed = (cover_source or "").strip()
     if not cover_seed and downloaded.get("thumbnail_url"):

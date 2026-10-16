@@ -1,14 +1,18 @@
+import time
+
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from . import database as db
 from .blossom_error import BlossomError
 from .drive import BlossomDriveManager
+from .log_util import log_to_file
 from .models import Playlist
 from .text_style import wrap_title
 from .youtube_downloader import list_channel_or_playlist_videos
 from .youtube_import_pipeline import import_youtube_track_safe
 
 CHANNEL_VIDEO_LIMIT = 50
+TRACK_THROTTLE_SECONDS = 0.4
 
 
 class YoutubeChannelWorker(QThread):
@@ -55,22 +59,29 @@ class YoutubeChannelWorker(QThread):
         imported = skipped = failed = 0
         total = len(videos)
         self.progress.emit(f"Найдено видео: {total} (за раз скачивается максимум {CHANNEL_VIDEO_LIMIT})")
+        log_to_file("youtube_channel", f"Старт: «{listing['source_title']}», видео {total}")
         for done, video in enumerate(videos, start=1):
             if self._stop_requested:
                 break
             label = video["title"] or video["id"]
             self.progress.emit(f"[{done}/{total}] {label}")
-            result = import_youtube_track_safe(
-                video["url"],
-                self.drive,
-                upload_to_drive=self.upload_to_drive,
-            )
+            log_to_file("youtube_channel", f"[{done}/{total}] начинаю: {label}")
+            try:
+                result = import_youtube_track_safe(
+                    video["url"],
+                    self.drive,
+                    upload_to_drive=self.upload_to_drive,
+                )
+            except Exception as exc:
+                log_to_file("youtube_channel", f"[{done}/{total}] ИСКЛЮЧЕНИЕ на {label}: {exc}")
+                result = {"ok": False, "error": {"code": "WORKER_EXCEPTION", "message": str(exc)}}
             if result.get("ok") and result.get("song_id"):
                 song_id = result["song_id"]
                 if playlist_id:
                     db.add_song_to_playlist(playlist_id, song_id)
                 if result.get("duplicate"):
                     skipped += 1
+                    self.progress.emit(f"[{done}/{total}] Уже есть, пропускаю: {label}")
                 else:
                     imported += 1
                 self.track_imported.emit()
@@ -78,6 +89,12 @@ class YoutubeChannelWorker(QThread):
                 error = result.get("error") or {}
                 self.progress.emit(f"[{done}/{total}] Не получилось: {label} ({error.get('code', 'ERR')})")
                 failed += 1
+            if not self._stop_requested and done < total:
+                time.sleep(TRACK_THROTTLE_SECONDS)
+        log_to_file(
+            "youtube_channel",
+            f"Готово: «{listing['source_title']}» — импортировано {imported}, пропущено {skipped}, ошибок {failed}",
+        )
 
         return {
             "imported": imported,

@@ -1,9 +1,12 @@
+import time
+
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from . import database as db
 from .blossom_error import BlossomError, Stage, fail
 from .drive import BlossomDriveManager
 from .import_pipeline import import_spotify_track_safe
+from .log_util import log_to_file
 from .models import Playlist
 from .spotify_web_service import (
     create_web_login,
@@ -13,6 +16,11 @@ from .spotify_web_service import (
     search_artist_web,
 )
 from .text_style import wrap_title
+
+# Пауза между треками при импорте большой дискографии — снижает шанс
+# рейт-лимита Spotify-сессии и не долбит нативные зависимости (yt-dlp/spotdl/
+# криптография сессии) запросами впритык один к одному.
+TRACK_THROTTLE_SECONDS = 0.4
 
 
 class ArtistImportWorker(QThread):
@@ -74,10 +82,21 @@ class ArtistImportWorker(QThread):
 
         imported = skipped = failed = 0
         total = len(tracks)
+        log_to_file("artist_import", f"Старт: «{artist_name}», треков {total}")
         for done, track in enumerate(tracks, start=1):
             if self._stop_requested:
                 break
-            song_id, status = self._import_track(track, done, total, upload_to_drive)
+            label = f"{track.get('artist', '')} — {track.get('title', '')}"
+            # На диск, с флашем, ПЕРЕД сетевым вызовом — если процесс упадёт
+            # так, что это даже не долетит до finished_err (нативный сбой,
+            # а не Python-исключение), в файле останется точный номер трека.
+            log_to_file("artist_import", f"[{done}/{total}] начинаю: {label}")
+            try:
+                song_id, status = self._import_track(track, done, total, upload_to_drive)
+            except Exception as exc:
+                log_to_file("artist_import", f"[{done}/{total}] ИСКЛЮЧЕНИЕ на {label}: {exc}")
+                self.progress.emit(f"[{done}/{total}] Не получилось: {label} ({exc})")
+                song_id, status = None, "failed"
             if status == "imported":
                 imported += 1
             elif status == "skipped":
@@ -88,6 +107,12 @@ class ArtistImportWorker(QThread):
                 db.add_song_to_playlist(playlist_id, song_id)
             if song_id:
                 self.track_imported.emit()
+            if not self._stop_requested and done < total:
+                time.sleep(TRACK_THROTTLE_SECONDS)
+        log_to_file(
+            "artist_import",
+            f"Готово: «{artist_name}» — импортировано {imported}, пропущено {skipped}, ошибок {failed}",
+        )
 
         return {
             "artist_name": artist_name,

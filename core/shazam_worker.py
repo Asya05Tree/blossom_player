@@ -92,5 +92,6 @@ class ShazamWorker(QThread):
             title_override=title,
             artist_override=artist,
             upload_to_drive=bool(self.drive.service),
+            auto_artist_playlist=True,
             progress_callback=lambda msg: self.progress.emit(msg),
         )

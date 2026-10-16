@@ -38,6 +38,7 @@ class YoutubeImportWorker(QThread):
                 lyrics=self.lyrics,
                 cover_source=self.cover_source,
                 upload_to_drive=self.upload_to_drive,
+                auto_artist_playlist=True,
                 progress_callback=lambda msg: self.progress.emit(msg),
             )
             if result.get("ok"):
