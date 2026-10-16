@@ -309,6 +309,15 @@ def get_playlist_songs(playlist_id: int) -> List[Song]:
     return [_row_to_song(r) for r in rows]
 
 
+def count_playlist_songs(playlist_id: int) -> int:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute('SELECT COUNT(*) FROM playlist_songs WHERE playlist_id = ?', (playlist_id,))
+    count = cursor.fetchone()[0]
+    conn.close()
+    return count
+
+
 def get_song_playlist_ids(song_id: int) -> List[int]:
     conn = get_connection()
     cursor = conn.cursor()

@@ -446,12 +446,13 @@ body {
     box-shadow: 0 8px 20px rgba(179, 157, 219, 0.45);
 }
 
-.btn-main .ico {
-    border-color: #fff;
-}
-
 .btn-main .ico-play {
     border-left-color: #fff;
+}
+
+.btn-main .ico-pause {
+    border-left-color: #fff;
+    border-right-color: #fff;
 }
 
 .btn-panel {
@@ -605,6 +606,10 @@ body {
 }
 
 .busy-overlay.hidden {
+    display: none;
+}
+
+.btn-modal.hidden {
     display: none;
 }
 
@@ -1028,6 +1033,15 @@ body {
     color: #9a86a4;
 }
 
+.pv-song-actions {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 4px;
+    max-width: 150px;
+}
+
 .pv-song-actions button {
     border: none;
     background: #ede7f6;
@@ -1036,4 +1050,5 @@ body {
     padding: 4px 8px;
     font-size: 10px;
     cursor: pointer;
+    flex: 0 0 auto;
 }

@@ -5,7 +5,7 @@ from typing import Any
 from mutagen.easyid3 import EasyID3
 
 from .blossom_error import Stage, fail
-from .paths import DOWNLOADS_DIR, TEMP_DIR
+from .paths import DOWNLOADS_DIR, TEMP_DIR, ensure_disk_space
 from .spotify_service import normalize_track_url
 from .spotdl_client import download_track
 from .log_util import log
@@ -70,6 +70,7 @@ def _pick_downloaded_file(expected_stem: str) -> str:
 
 
 def _download_with_spotdl_api(track_url: str, meta: dict[str, Any]) -> dict[str, Any]:
+    ensure_disk_space()
     _ensure_dir(DOWNLOADS_DIR, "DOWNLOAD_DIR_CREATE_FAIL", "Не удалось создать папку загрузок")
     _ensure_dir(TEMP_DIR, "TEMP_DIR_CREATE_FAIL", "Не удалось создать temp-папку")
     normalized = normalize_track_url(track_url)

@@ -41,6 +41,8 @@ class BlossomBridge(QObject):
     filePicked = pyqtSignal(str, str)
     toastMessage = pyqtSignal(str, bool)
     songForEditReady = pyqtSignal(str)
+    playlistSongsReady = pyqtSignal(int, str)
+    playlistsForSongReady = pyqtSignal(int, str)
     positionChanged = pyqtSignal(int, int)
     importProgress = pyqtSignal(str)
     spotifyAutoProgress = pyqtSignal(str)
@@ -343,6 +345,7 @@ class BlossomBridge(QObject):
         if not song:
             self.toastMessage.emit("Трек не найден", True)
             return
+        affected_playlist_ids = db.get_song_playlist_ids(song_id)
         # Delete from Drive
         if self.drive.service:
             for fid in [song.drive_file_id, song.drive_cover_id, song.drive_lyrics_id, song.drive_meta_id]:
@@ -354,6 +357,8 @@ class BlossomBridge(QObject):
         if not db.delete_song(song_id):
             self.toastMessage.emit("Не удалось удалить", True)
             return
+        for playlist_id in affected_playlist_ids:
+            self._delete_if_empty(playlist_id)
         self._reload_queue_keep()
         self._update_ui_state()
         self._emit_library()
@@ -470,8 +475,12 @@ class BlossomBridge(QObject):
             self._emit_playlists()
             self.toastMessage.emit("Плейлист удалён", False)
 
-    @pyqtSlot(int, result=str)
-    def getPlaylistSongsJson(self, playlist_id: int) -> str:
+    @pyqtSlot(int)
+    def requestPlaylistSongs(self, playlist_id: int):
+        # result=str QWebChannel-слоты требуют JS-колбэка и НИКОГДА не возвращаются
+        # синхронно — старый код звал их как обычную функцию (var x = pyBridge.foo())
+        # и всегда получал undefined, из-за чего плейлист выглядел пустым даже
+        # с песнями внутри. Сигнал + подписка в JS — единственный рабочий способ.
         songs = db.get_playlist_songs(playlist_id)
         items = []
         for song in songs:
@@ -485,10 +494,10 @@ class BlossomBridge(QObject):
                 "filepath": song.filepath,
                 "added_at": song.added_at or 0,
             })
-        return json.dumps(items, ensure_ascii=False)
+        self.playlistSongsReady.emit(playlist_id, json.dumps(items, ensure_ascii=False))
 
-    @pyqtSlot(int, result=str)
-    def getPlaylistsForSongJson(self, song_id: int) -> str:
+    @pyqtSlot(int)
+    def requestPlaylistsForSong(self, song_id: int):
         all_playlists = db.get_all_playlists()
         song_pl_ids = db.get_song_playlist_ids(song_id)
         items = []
@@ -498,12 +507,20 @@ class BlossomBridge(QObject):
                 "name": p.name,
                 "has_song": p.id in song_pl_ids,
             })
-        return json.dumps(items, ensure_ascii=False)
+        self.playlistsForSongReady.emit(song_id, json.dumps(items, ensure_ascii=False))
 
     @pyqtSlot(int, int)
     def removeSongFromPlaylist(self, playlist_id: int, song_id: int):
         if db.remove_song_from_playlist(playlist_id, song_id):
             self.toastMessage.emit("Убрано из плейлиста", False)
+            self._delete_if_empty(playlist_id)
+
+    def _delete_if_empty(self, playlist_id: int) -> None:
+        # Пустые плейлисты не нужны — убираем их сразу, а не копим мусор, который
+        # потом приходится чистить вручную.
+        if db.count_playlist_songs(playlist_id) == 0:
+            if db.delete_playlist(playlist_id):
+                self._emit_playlists()
 
     @pyqtSlot(int, str)
     def renamePlaylist(self, playlist_id: int, new_name: str):

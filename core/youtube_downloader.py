@@ -9,7 +9,7 @@ from yt_dlp import YoutubeDL
 
 from .blossom_error import Stage, fail
 from .ffmpeg_util import resolve_ffmpeg
-from .paths import DOWNLOADS_DIR, TEMP_DIR
+from .paths import DOWNLOADS_DIR, TEMP_DIR, ensure_disk_space
 
 VIDEO_ID_RE = re.compile(
     r'(?:youtube\.com/(?:watch\?v=|shorts/|embed/)|youtu\.be/)([A-Za-z0-9_-]{11})'
@@ -34,6 +34,7 @@ def download_youtube_audio(url: str) -> dict[str, Any]:
     их можно переопределить в UI перед сохранением в библиотеку.
     """
     video_id = extract_video_id(url)
+    ensure_disk_space()
     try:
         os.makedirs(DOWNLOADS_DIR, exist_ok=True)
         os.makedirs(TEMP_DIR, exist_ok=True)

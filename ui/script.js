@@ -97,6 +97,24 @@ function wireBridgeSignals() {
         });
     }
 
+    if (pyBridge.playlistSongsReady) {
+        pyBridge.playlistSongsReady.connect(function(playlistId, raw) {
+            var currentId = parseInt(document.getElementById("pv-playlist-id").value);
+            if (playlistId === currentId) {
+                _renderPlaylistViewSongs(raw, playlistId);
+            }
+        });
+    }
+
+    if (pyBridge.playlistsForSongReady) {
+        pyBridge.playlistsForSongReady.connect(function(songId, raw) {
+            var currentId = parseInt(document.getElementById("pl-modal-song-id").value);
+            if (songId === currentId) {
+                _renderPlModalList(raw);
+            }
+        });
+    }
+
     if (pyBridge.filePicked) {
         pyBridge.filePicked.connect(function(path, kind) {
             onFilePicked(path, kind);
@@ -1327,6 +1345,10 @@ function startDuplicatesScan() {
     if (duplicatesScanRunning) return;
     document.getElementById("duplicates-list").innerHTML = "";
     lastDuplicateGroups = [];
+    // Кнопка "Удалить всё автоматически" появляется только ПОСЛЕ того, как поиск
+    // нашёл дубли — до этого её не должно быть видно вообще, не только disabled.
+    var autoBtn = document.getElementById("btn-duplicates-auto");
+    if (autoBtn) autoBtn.classList.add("hidden");
     setDuplicatesStatus("Запускаю поиск…");
     setDuplicatesLock(true);
     pyBridge.findDuplicates();
@@ -1359,7 +1381,10 @@ function autoResolveAllDuplicates() {
     document.getElementById("duplicates-list").innerHTML = "<p style='font-size:12px;color:#9a86a4'>Готово — лишние копии удалены.</p>";
     lastDuplicateGroups = [];
     var autoBtn = document.getElementById("btn-duplicates-auto");
-    if (autoBtn) autoBtn.disabled = true;
+    if (autoBtn) {
+        autoBtn.disabled = true;
+        autoBtn.classList.add("hidden");
+    }
 }
 
 function _formatFilesize(bytes) {
@@ -1373,7 +1398,10 @@ function renderDuplicateGroups(groups) {
     list.innerHTML = "";
     lastDuplicateGroups = groups || [];
     var autoBtn = document.getElementById("btn-duplicates-auto");
-    if (autoBtn) autoBtn.disabled = duplicatesScanRunning || !lastDuplicateGroups.length;
+    if (autoBtn) {
+        autoBtn.classList.toggle("hidden", !lastDuplicateGroups.length);
+        autoBtn.disabled = duplicatesScanRunning || !lastDuplicateGroups.length;
+    }
     if (!groups.length) {
         list.innerHTML = "<p style='font-size:12px;color:#9a86a4'>Дублей не найдено.</p>";
         return;
@@ -1429,9 +1457,8 @@ function openPlaylistModal(songId) {
     listEl.innerHTML = "<p style='font-size:12px;color:#9a86a4'>Загрузка...</p>";
     document.getElementById("playlist-modal").style.display = "flex";
     plModalChecked = {};
-    if (pyBridge && pyBridge.getPlaylistsForSongJson) {
-        var raw = pyBridge.getPlaylistsForSongJson(songId);
-        _renderPlModalList(raw);
+    if (pyBridge && pyBridge.requestPlaylistsForSong) {
+        pyBridge.requestPlaylistsForSong(songId);
     }
 }
 
@@ -1461,12 +1488,12 @@ function plModalCreateAndAdd() {
     if (!name) { showToast("Введи название", true); return; }
     if (pyBridge) pyBridge.createPlaylist(name);
     document.getElementById("pl-modal-new-name").value = "";
-    setTimeout(function() {
-        var songId = parseInt(document.getElementById("pl-modal-song-id").value);
-        if (pyBridge && pyBridge.getPlaylistsForSongJson) {
-            _renderPlModalList(pyBridge.getPlaylistsForSongJson(songId));
-        }
-    }, 300);
+    // createPlaylist выполняется синхронно на стороне Python раньше, чем JS успевает
+    // послать следующий вызов — отдельный setTimeout-поллинг тут не нужен.
+    var songId = parseInt(document.getElementById("pl-modal-song-id").value);
+    if (pyBridge && pyBridge.requestPlaylistsForSong) {
+        pyBridge.requestPlaylistsForSong(songId);
+    }
 }
 
 function plModalSave() {
@@ -1496,9 +1523,8 @@ function openPlaylistView(playlistId, name) {
     var listEl = document.getElementById("pv-song-list");
     listEl.innerHTML = "<p style='font-size:12px;color:#9a86a4'>Загрузка...</p>";
     document.getElementById("playlist-view-modal").style.display = "flex";
-    if (pyBridge && pyBridge.getPlaylistSongsJson) {
-        var raw = pyBridge.getPlaylistSongsJson(playlistId);
-        _renderPlaylistViewSongs(raw, playlistId);
+    if (pyBridge && pyBridge.requestPlaylistSongs) {
+        pyBridge.requestPlaylistSongs(playlistId);
     }
 }
 
@@ -1522,15 +1548,36 @@ function _renderPlaylistViewSongs(json, playlistId) {
             "<div class='pv-song-artist'>" + escapeHtml(s.artist_raw || s.artist) + "</div>" +
             "</div>" +
             "<div class='pv-song-actions'>" +
+            "<button type='button' data-pvplay='" + s.id + "'>Play</button>" +
+            "<button type='button' data-pvedit='" + s.id + "'>Изм.</button>" +
+            "<button type='button' data-pvplaylist='" + s.id + "'>Плейлист</button>" +
             "<button type='button' data-pvremove='" + s.id + "'>Убрать</button>" +
             "</div>";
         listEl.appendChild(row);
+    });
+    listEl.querySelectorAll("[data-pvplay]").forEach(function(btn) {
+        btn.onclick = function() {
+            selectedSongId = parseInt(btn.getAttribute("data-pvplay"));
+            pyBridge.playSongById(selectedSongId);
+            isPlaying = true;
+            setPlayIcon(true);
+        };
+    });
+    listEl.querySelectorAll("[data-pvedit]").forEach(function(btn) {
+        btn.onclick = function() { openEditModal(parseInt(btn.getAttribute("data-pvedit"))); };
+    });
+    listEl.querySelectorAll("[data-pvplaylist]").forEach(function(btn) {
+        btn.onclick = function() { openPlaylistModal(parseInt(btn.getAttribute("data-pvplaylist"))); };
     });
     listEl.querySelectorAll("[data-pvremove]").forEach(function(btn) {
         btn.onclick = function() {
             var songId = parseInt(btn.getAttribute("data-pvremove"));
             pyBridge.removeSongFromPlaylist(playlistId, songId);
-            btn.closest(".pv-song-row").remove();
+            var row = btn.closest(".pv-song-row");
+            if (row) row.remove();
+            // Пустой плейлист сервер удаляет сам (см. _delete_if_empty в bridge.py) —
+            // не оставляем открытым модальное окно над уже несуществующим плейлистом.
+            if (!listEl.children.length) closePlaylistView();
         };
     });
 }
