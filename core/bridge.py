@@ -26,10 +26,11 @@ from typing import Optional
 from .text_style import strip_decor, wrap_artist, wrap_title
 
 DEFAULT_LYRICS = "Текст песни пока не добавлен."
+MAX_PLAYLISTS_PER_SONG = 5
 
 
 class BlossomBridge(QObject):
-    songChanged = pyqtSignal(str, str, str, str, str, str, bool, bool)
+    songChanged = pyqtSignal(int, str, str, str, str, str, str, bool, bool)
     nextSongPreview = pyqtSignal(str)
     playlistListUpdated = pyqtSignal(list)
     importStarted = pyqtSignal(str)
@@ -168,6 +169,7 @@ class BlossomBridge(QObject):
         return "file:///" + os.path.abspath(cover_path).replace("\\", "/") + f"?v={mtime}"
 
     def _emit_library(self):
+        playlist_names = db.get_song_playlist_names_map()
         items = []
         for song in db.get_all_songs():
             items.append({
@@ -179,6 +181,7 @@ class BlossomBridge(QObject):
                 "cover": self._cover_file_url(song.cover_path or ""),
                 "filepath": song.filepath,
                 "added_at": song.added_at or 0,
+                "playlists": playlist_names.get(song.id, []),
             })
         self.libraryUpdated.emit(json.dumps(items, ensure_ascii=False))
 
@@ -199,6 +202,7 @@ class BlossomBridge(QObject):
         song = self.player.get_current_song()
         if not song:
             self.songChanged.emit(
+                0,
                 "Выбери трек",
                 "Библиотека пуста или на паузе",
                 "",
@@ -224,6 +228,7 @@ class BlossomBridge(QObject):
         self.nextSongPreview.emit(f"Далее: {next_text}")
 
         self.songChanged.emit(
+            song.id,
             song.title,
             song.artist,
             cover_url,
@@ -466,7 +471,15 @@ class BlossomBridge(QObject):
 
     @pyqtSlot(int, int)
     def addSongToPlaylist(self, playlist_id: int, song_id: int):
+        current_ids = db.get_song_playlist_ids(song_id)
+        if playlist_id not in current_ids and len(current_ids) >= MAX_PLAYLISTS_PER_SONG:
+            self.toastMessage.emit(
+                f"Песня уже в {MAX_PLAYLISTS_PER_SONG} плейлистах — это максимум",
+                True,
+            )
+            return
         db.add_song_to_playlist(playlist_id, song_id)
+        self._emit_library()
         self.toastMessage.emit("Добавлено в плейлист", False)
 
     @pyqtSlot(int)
@@ -482,8 +495,11 @@ class BlossomBridge(QObject):
         # и всегда получал undefined, из-за чего плейлист выглядел пустым даже
         # с песнями внутри. Сигнал + подписка в JS — единственный рабочий способ.
         songs = db.get_playlist_songs(playlist_id)
+        playlist_names = db.get_song_playlist_names_map()
+        current_name = next((p.name for p in db.get_all_playlists() if p.id == playlist_id), "")
         items = []
         for song in songs:
+            other_playlists = [n for n in playlist_names.get(song.id, []) if n != current_name]
             items.append({
                 "id": song.id,
                 "title": song.title,
@@ -493,6 +509,7 @@ class BlossomBridge(QObject):
                 "cover": self._cover_file_url(song.cover_path or ""),
                 "filepath": song.filepath,
                 "added_at": song.added_at or 0,
+                "other_playlists": other_playlists,
             })
         self.playlistSongsReady.emit(playlist_id, json.dumps(items, ensure_ascii=False))
 
@@ -513,6 +530,7 @@ class BlossomBridge(QObject):
     def removeSongFromPlaylist(self, playlist_id: int, song_id: int):
         if db.remove_song_from_playlist(playlist_id, song_id):
             self.toastMessage.emit("Убрано из плейлиста", False)
+            self._emit_library()
             self._delete_if_empty(playlist_id)
 
     def _delete_if_empty(self, playlist_id: int) -> None:

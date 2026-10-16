@@ -318,6 +318,25 @@ def count_playlist_songs(playlist_id: int) -> int:
     return count
 
 
+def get_song_playlist_names_map() -> dict:
+    """Один запрос на всю библиотеку вместо N+1 — для показа у каждой песни,
+    в каких плейлистах она состоит (в списке треков и внутри плейлиста)."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT ps.song_id, p.name
+        FROM playlist_songs ps
+        JOIN playlists p ON p.id = ps.playlist_id
+        ORDER BY p.name COLLATE NOCASE
+    ''')
+    rows = cursor.fetchall()
+    conn.close()
+    result: dict = {}
+    for song_id, name in rows:
+        result.setdefault(song_id, []).append(name)
+    return result
+
+
 def get_song_playlist_ids(song_id: int) -> List[int]:
     conn = get_connection()
     cursor = conn.cursor()

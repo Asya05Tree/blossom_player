@@ -4,6 +4,9 @@ let currentLoopMode = "sequence";
 let librarySongs = [];
 let playlists = [];
 let selectedSongId = null;
+let currentPlayingSongId = null;
+let activeSongPlaylistIds = [];
+const MAX_PLAYLISTS_PER_SONG = 5;
 
 var driveLoggedIn = false;
 
@@ -61,7 +64,7 @@ function onDriveReady(data) {
 }
 
 function wireBridgeSignals() {
-    pyBridge.songChanged.connect(function(title, artist, cover, lyrics, video, playlists, has_prev, has_next) {
+    pyBridge.songChanged.connect(function(songId, title, artist, cover, lyrics, video, playlists, has_prev, has_next) {
         document.getElementById("title").innerText = title;
         document.getElementById("artist").innerText = artist;
         document.getElementById("lyrics").innerText = lyrics;
@@ -76,6 +79,8 @@ function wireBridgeSignals() {
             var custom = localStorage.getItem("blossom_video_bg");
             setVideoSource(custom || "bg.webm");
         }
+        currentPlayingSongId = songId || null;
+        refreshActivePlaylistHighlight();
     });
 
     if (pyBridge.nextSongPreview) {
@@ -94,6 +99,7 @@ function wireBridgeSignals() {
         pyBridge.playlistListUpdated.connect(function(list) {
             playlists = list || [];
             renderPlaylists();
+            refreshActivePlaylistHighlight();
         });
     }
 
@@ -108,9 +114,15 @@ function wireBridgeSignals() {
 
     if (pyBridge.playlistsForSongReady) {
         pyBridge.playlistsForSongReady.connect(function(songId, raw) {
-            var currentId = parseInt(document.getElementById("pl-modal-song-id").value);
-            if (songId === currentId) {
+            var modalSongId = parseInt(document.getElementById("pl-modal-song-id").value);
+            if (songId === modalSongId) {
                 _renderPlModalList(raw);
+            }
+            if (songId === currentPlayingSongId) {
+                var data = [];
+                try { data = typeof raw === "string" ? JSON.parse(raw) : raw; } catch (e) {}
+                activeSongPlaylistIds = data.filter(function(p) { return p.has_song; }).map(function(p) { return p.id; });
+                _applyPlaylistHighlight();
             }
         });
     }
@@ -572,6 +584,8 @@ function renderLibrary(json) {
             "<div class='song-item-info'>" +
             "<div class='song-item-title'>" + escapeHtml(s.title_raw || s.title) + "</div>" +
             "<div class='song-item-artist'>" + escapeHtml(s.artist_raw || s.artist) + "</div>" +
+            (s.playlists && s.playlists.length ?
+                "<div class='song-item-playlists'>&#9834; " + escapeHtml(s.playlists.join(", ")) + "</div>" : "") +
             "</div>" +
             "<div class='song-item-actions'>" +
             "<button type='button' data-play='" + s.id + "'>Play</button>" +
@@ -624,6 +638,7 @@ function renderPlaylists() {
     playlists.forEach(function(p) {
         const row = document.createElement("div");
         row.className = "playlist-item";
+        row.setAttribute("data-plid", p.id);
         row.innerHTML = "<span class='pl-name' data-viewpl='" + p.id + "' data-plname='" + escapeHtml(p.name) + "'>" + escapeHtml(p.name) + "</span>" +
             "<span>" +
             "<button type='button' data-playpl='" + p.id + "' title='Воспроизвести'>&#9654;</button> " +
@@ -647,6 +662,25 @@ function renderPlaylists() {
             if (confirm("Удалить плейлист?")) pyBridge.deletePlaylistById(parseInt(btn.getAttribute("data-delpl")));
         };
     });
+    _applyPlaylistHighlight();
+}
+
+function _applyPlaylistHighlight() {
+    var list = document.getElementById("playlist-list");
+    if (!list) return;
+    list.querySelectorAll(".playlist-item").forEach(function(row) {
+        var id = parseInt(row.getAttribute("data-plid"));
+        row.classList.toggle("playlist-item-active", activeSongPlaylistIds.indexOf(id) !== -1);
+    });
+}
+
+function refreshActivePlaylistHighlight() {
+    if (pyBridge && pyBridge.requestPlaylistsForSong && currentPlayingSongId) {
+        pyBridge.requestPlaylistsForSong(currentPlayingSongId);
+    } else {
+        activeSongPlaylistIds = [];
+        _applyPlaylistHighlight();
+    }
 }
 
 function createPlaylist() {
@@ -1479,7 +1513,21 @@ function _renderPlModalList(json) {
         listEl.appendChild(row);
     });
     listEl.querySelectorAll("input[data-plid]").forEach(function(cb) {
-        cb.onchange = function() { plModalChecked[parseInt(cb.getAttribute("data-plid"))] = cb.checked; };
+        cb.onchange = function() {
+            plModalChecked[parseInt(cb.getAttribute("data-plid"))] = cb.checked;
+            _applyPlModalLimit();
+        };
+    });
+    _applyPlModalLimit();
+}
+
+function _applyPlModalLimit() {
+    var checkedCount = Object.keys(plModalChecked).filter(function(id) { return plModalChecked[id]; }).length;
+    var atLimit = checkedCount >= MAX_PLAYLISTS_PER_SONG;
+    var hint = document.getElementById("pl-modal-limit-hint");
+    if (hint) hint.classList.toggle("hidden", !atLimit);
+    document.querySelectorAll("#pl-modal-list input[data-plid]").forEach(function(cb) {
+        cb.disabled = atLimit && !cb.checked;
     });
 }
 
@@ -1509,6 +1557,7 @@ function plModalSave() {
     });
     closePlModal();
     showToast("Плейлисты обновлены", false);
+    if (songId === currentPlayingSongId) refreshActivePlaylistHighlight();
 }
 
 function closePlModal() {
@@ -1522,10 +1571,18 @@ function openPlaylistView(playlistId, name) {
     document.getElementById("pv-title").innerText = name || "Плейлист";
     var listEl = document.getElementById("pv-song-list");
     listEl.innerHTML = "<p style='font-size:12px;color:#9a86a4'>Загрузка...</p>";
-    document.getElementById("playlist-view-modal").style.display = "flex";
+    document.getElementById("playlist-list-view").classList.add("hidden");
+    document.getElementById("playlist-detail-view").classList.remove("hidden");
     if (pyBridge && pyBridge.requestPlaylistSongs) {
         pyBridge.requestPlaylistSongs(playlistId);
     }
+}
+
+function backToPlaylists() {
+    document.getElementById("playlist-detail-view").classList.add("hidden");
+    document.getElementById("playlist-list-view").classList.remove("hidden");
+    document.getElementById("pv-playlist-id").value = "";
+    refreshActivePlaylistHighlight();
 }
 
 function _renderPlaylistViewSongs(json, playlistId) {
@@ -1546,6 +1603,8 @@ function _renderPlaylistViewSongs(json, playlistId) {
             "<div class='pv-song-info'>" +
             "<div class='pv-song-title'>" + escapeHtml(s.title_raw || s.title) + "</div>" +
             "<div class='pv-song-artist'>" + escapeHtml(s.artist_raw || s.artist) + "</div>" +
+            (s.other_playlists && s.other_playlists.length ?
+                "<div class='song-item-playlists'>&#9834; также: " + escapeHtml(s.other_playlists.join(", ")) + "</div>" : "") +
             "</div>" +
             "<div class='pv-song-actions'>" +
             "<button type='button' data-pvplay='" + s.id + "'>Play</button>" +
@@ -1576,8 +1635,8 @@ function _renderPlaylistViewSongs(json, playlistId) {
             var row = btn.closest(".pv-song-row");
             if (row) row.remove();
             // Пустой плейлист сервер удаляет сам (см. _delete_if_empty в bridge.py) —
-            // не оставляем открытым модальное окно над уже несуществующим плейлистом.
-            if (!listEl.children.length) closePlaylistView();
+            // не остаёмся на странице уже несуществующего плейлиста.
+            if (!listEl.children.length) backToPlaylists();
         };
     });
 }
@@ -1585,11 +1644,6 @@ function _renderPlaylistViewSongs(json, playlistId) {
 function playCurrentPlaylist() {
     var plId = parseInt(document.getElementById("pv-playlist-id").value);
     if (pyBridge && plId) { pyBridge.playPlaylist(plId); isPlaying = true; setPlayIcon(true); }
-    closePlaylistView();
-}
-
-function closePlaylistView() {
-    document.getElementById("playlist-view-modal").style.display = "none";
 }
 
 /* === Rename Playlist === */

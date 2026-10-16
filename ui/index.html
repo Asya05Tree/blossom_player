@@ -46,11 +46,22 @@
             <div id="song-list" class="song-list"></div>
         </div>
         <div id="library-tab-playlists" class="library-tab-pane hidden">
-            <div class="file-row">
-                <input type="text" id="new-playlist-name" class="cozy-input" placeholder="Название плейлиста">
-                <button type="button" class="btn-modal btn-secondary" onclick="createPlaylist()">+</button>
+            <div id="playlist-list-view" class="playlist-sub-pane">
+                <div class="file-row">
+                    <input type="text" id="new-playlist-name" class="cozy-input" placeholder="Название плейлиста">
+                    <button type="button" class="btn-modal btn-secondary" onclick="createPlaylist()">+</button>
+                </div>
+                <div id="playlist-list" class="playlist-list"></div>
             </div>
-            <div id="playlist-list" class="playlist-list"></div>
+            <div id="playlist-detail-view" class="playlist-sub-pane hidden">
+                <div class="playlist-detail-head">
+                    <button type="button" class="btn-text" onclick="backToPlaylists()">&larr; Назад</button>
+                    <h3 id="pv-title" class="playlist-detail-title">Плейлист</h3>
+                    <button type="button" class="btn-text" onclick="playCurrentPlaylist()">&#9654; Все</button>
+                </div>
+                <input type="hidden" id="pv-playlist-id">
+                <div id="pv-song-list" class="playlist-songs-list"></div>
+            </div>
         </div>
     </aside>
     
@@ -352,6 +363,7 @@
         <div class="modal-card">
             <h3 class="modal-title">Добавить в плейлист</h3>
             <input type="hidden" id="pl-modal-song-id">
+            <p id="pl-modal-limit-hint" class="hint-text hidden">Песня может быть максимум в 5 плейлистах</p>
             <div id="pl-modal-list" class="playlist-modal-list"></div>
             <div class="file-row" style="margin-top:8px">
                 <input type="text" id="pl-modal-new-name" class="cozy-input" placeholder="Новый плейлист...">
@@ -360,18 +372,6 @@
             <div class="modal-actions">
                 <button type="button" class="btn-modal btn-primary" onclick="plModalSave()">Сохранить</button>
                 <button type="button" class="btn-modal btn-ghost" onclick="closePlModal()">Закрыть</button>
-            </div>
-        </div>
-    </div>
-
-    <div id="playlist-view-modal" class="modal-overlay" style="display: none;">
-        <div class="modal-card modal-card-wide">
-            <h3 class="modal-title" id="pv-title">Плейлист</h3>
-            <input type="hidden" id="pv-playlist-id">
-            <div id="pv-song-list" class="playlist-songs-list"></div>
-            <div class="modal-actions">
-                <button type="button" class="btn-modal btn-primary" onclick="playCurrentPlaylist()">Воспроизвести все</button>
-                <button type="button" class="btn-modal btn-ghost" onclick="closePlaylistView()">Закрыть</button>
             </div>
         </div>
     </div>
