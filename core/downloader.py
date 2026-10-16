@@ -4,7 +4,7 @@ from typing import Any
 
 from mutagen.easyid3 import EasyID3
 
-from .blossom_error import Stage, fail
+from .blossom_error import BlossomError, Stage, fail
 from .paths import DOWNLOADS_DIR, TEMP_DIR, ensure_disk_space
 from .spotify_service import normalize_track_url
 from .spotdl_client import download_track
@@ -48,27 +48,6 @@ def _read_tags(path: str, fallback_title: str, fallback_artist: str) -> dict[str
     return {"title": title, "artist": artist}
 
 
-def _pick_downloaded_file(expected_stem: str) -> str:
-    if not os.path.isdir(DOWNLOADS_DIR):
-        fail(Stage.SPOTIFY_DOWNLOAD, "DOWNLOAD_DIR_MISSING", "Папка загрузок не создана", DOWNLOADS_DIR)
-    candidates = []
-    for name in os.listdir(DOWNLOADS_DIR):
-        full = os.path.join(DOWNLOADS_DIR, name)
-        if not os.path.isfile(full):
-            continue
-        if os.path.splitext(name)[1].lower() not in SUPPORTED_AUDIO_EXT:
-            continue
-        candidates.append(full)
-    if not candidates:
-        fail(Stage.SPOTIFY_DOWNLOAD, "AUDIO_NOT_FOUND", "После spotdl не найден аудиофайл", DOWNLOADS_DIR)
-    expected_lower = expected_stem.lower()
-    for path in candidates:
-        if os.path.splitext(os.path.basename(path))[0].lower() == expected_lower:
-            return _validate_local_audio(path)
-    newest = max(candidates, key=os.path.getmtime)
-    return _validate_local_audio(newest)
-
-
 def _download_with_spotdl_api(track_url: str, meta: dict[str, Any]) -> dict[str, Any]:
     ensure_disk_space()
     _ensure_dir(DOWNLOADS_DIR, "DOWNLOAD_DIR_CREATE_FAIL", "Не удалось создать папку загрузок")
@@ -80,14 +59,15 @@ def _download_with_spotdl_api(track_url: str, meta: dict[str, Any]) -> dict[str,
         log("download", f"spotdl: скачивание «{meta.get('title', '')}»…")
         song_obj, downloaded = download_track(normalized)
         log("download", "spotdl: скачивание завершено")
+    except BlossomError:
+        raise
     except Exception as exc:
         fail(Stage.SPOTIFY_DOWNLOAD, "SPOTDL_DOWNLOAD_FAIL", "spotdl не смог скачать трек", str(exc))
 
-    if downloaded is None:
-        stem = f"{meta['artist']} - {meta['title']}"
-        path = _pick_downloaded_file(stem)
-    else:
-        path = _validate_local_audio(str(downloaded))
+    # download_track() сам бросает BlossomError, если downloaded is None (провал
+    # скачивания) — сюда доходим только с реальным путём к реальному файлу ЭТОГО
+    # трека, больше никакого угадывания "самого свежего файла в папке".
+    path = _validate_local_audio(str(downloaded))
 
     auto_lyrics = ""
     if song_obj and getattr(song_obj, "lyrics", None):

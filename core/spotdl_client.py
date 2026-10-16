@@ -69,7 +69,18 @@ def download_track(track_url: str) -> tuple[Any, Any]:
     normalized = normalize_track_url(track_url)
     song = _song_cache.get(normalized) or search_track(track_url)
     client = get_spotdl_client()
-    return client.download(song)
+    client.downloader.errors.clear()
+    song_obj, downloaded = client.download(song)
+    if downloaded is None:
+        # downloaded=None из spotdl — это ВСЕГДА провал скачивания (см.
+        # Downloader.download_multiple_songs), не редкий формат успешного ответа.
+        # Раньше это трактовалось как "скачалось, просто путь не вернулся" и код
+        # хватал САМЫЙ СВЕЖИЙ файл из папки загрузок наугад — на деле это мог
+        # оказаться файл СОВСЕМ ДРУГОГО трека (прошлый успешный download), который
+        # потом сохранялся в библиотеку под метаданными упавшего трека.
+        last_error = client.downloader.errors[-1] if client.downloader.errors else "неизвестная ошибка"
+        fail(Stage.SPOTIFY_DOWNLOAD, "SPOTDL_DOWNLOAD_FAIL", "spotdl не смог скачать трек", last_error)
+    return song_obj, downloaded
 
 
 def create_spotdl_client():
