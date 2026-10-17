@@ -14,6 +14,7 @@ from mutagen.id3 import ID3, ID3NoHeaderError
 from .blossom_error import Stage, fail
 from .ffmpeg_util import resolve_ffmpeg, resolve_ffprobe
 from .paths import TEMP_DIR
+from .proc_util import NO_WINDOW_FLAGS
 
 
 def get_duration_seconds(filepath: str) -> float:
@@ -23,7 +24,7 @@ def get_duration_seconds(filepath: str) -> float:
     try:
         proc = subprocess.run(
             [ffprobe, "-v", "quiet", "-print_format", "json", "-show_format", filepath],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True, text=True, timeout=30, creationflags=NO_WINDOW_FLAGS,
         )
         data = json.loads(proc.stdout)
         return float(data["format"]["duration"])
@@ -68,7 +69,7 @@ def trim_audio(filepath: str, cut_start_seconds: float, cut_end_seconds: float) 
         tmp_out,
     ]
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120, creationflags=NO_WINDOW_FLAGS)
     except Exception as exc:
         fail(Stage.PIPELINE, "TRIM_RUN_FAIL", "Не удалось запустить ffmpeg для обрезки", str(exc))
     if proc.returncode != 0 or not os.path.isfile(tmp_out) or os.path.getsize(tmp_out) <= 0:

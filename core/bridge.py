@@ -22,7 +22,7 @@ from .trim_util import trim_audio
 from .ocr_worker import OcrWorker
 from .text_search_worker import TextSearchDownloadWorker
 from .shazam_worker import ShazamWorker
-from .lyrics_worker import LyricsPreviewWorker, LyricsBulkWorker
+from .lyrics_worker import LyricsPreviewWorker, LyricsBulkWorker, ClearAllLyricsWorker
 from .drive_meta_sync import push_song_meta
 from typing import Optional
 from .text_style import strip_decor, wrap_artist, wrap_title
@@ -108,6 +108,7 @@ class BlossomBridge(QObject):
         self._shazam_worker = None
         self._lyrics_preview_worker = None
         self._lyrics_bulk_worker = None
+        self._clear_all_lyrics_worker = None
         db.init_db()
         self.player.player.positionChanged.connect(self._on_position_changed)
         self.player.player.durationChanged.connect(self._on_duration_changed)
@@ -119,7 +120,7 @@ class BlossomBridge(QObject):
         "_import_worker", "_youtube_import_worker", "_artist_import_worker", "_youtube_channel_worker",
         "_instrumental_search_worker", "_instrumental_download_worker", "_ocr_worker",
         "_text_search_worker", "_shazam_worker", "_duplicate_finder_worker", "_spotify_library_worker",
-        "_lyrics_preview_worker", "_lyrics_bulk_worker",
+        "_lyrics_preview_worker", "_lyrics_bulk_worker", "_clear_all_lyrics_worker",
     )
 
     def _active_jobs(self) -> list:
@@ -1070,12 +1071,18 @@ class BlossomBridge(QObject):
     def _on_lyrics_preview_err(self, err):
         self.lyricsPreviewFailed.emit(err.get("message", "Не удалось найти текст"))
 
+    def _any_lyrics_bulk_job_running(self) -> bool:
+        return bool(
+            (self._lyrics_bulk_worker and self._lyrics_bulk_worker.isRunning())
+            or (self._clear_all_lyrics_worker and self._clear_all_lyrics_worker.isRunning())
+        )
+
     @pyqtSlot()
     def findMissingLyrics(self):
         """Настройки → «Найти текст песен для песен без текста»: массовый проход
         по всей библиотеке, у кого текст ещё не заполнен."""
-        if self._lyrics_bulk_worker and self._lyrics_bulk_worker.isRunning():
-            self.lyricsBulkFailed.emit("Поиск уже выполняется")
+        if self._any_lyrics_bulk_job_running():
+            self.lyricsBulkFailed.emit("Другая операция с текстами уже выполняется")
             return
         self.lyricsBulkStarted.emit()
         self._lyrics_bulk_worker = LyricsBulkWorker(drive=self.drive)
@@ -1085,19 +1092,67 @@ class BlossomBridge(QObject):
         self._lyrics_bulk_worker.start()
 
     @pyqtSlot()
+    def recheckInstrumentalLyrics(self):
+        """Настройки → «Перепроверить инструменталы»: повторно ищет текст для
+        песен, уже помеченных инструментальными — на случай, если раньше их
+        пометили так ошибочно (например, из-за бага скрейпинга Genius)."""
+        if self._any_lyrics_bulk_job_running():
+            self.lyricsBulkFailed.emit("Другая операция с текстами уже выполняется")
+            return
+        self.lyricsBulkStarted.emit()
+        self._lyrics_bulk_worker = LyricsBulkWorker(drive=self.drive, mode="recheck_instrumental")
+        self._lyrics_bulk_worker.progress.connect(self.lyricsBulkProgress.emit)
+        self._lyrics_bulk_worker.finished_ok.connect(self._on_lyrics_bulk_ok)
+        self._lyrics_bulk_worker.finished_err.connect(self._on_lyrics_bulk_err)
+        self._lyrics_bulk_worker.start()
+
+    @pyqtSlot()
+    def clearAllLyrics(self):
+        """Настройки → «Удалить текст у всех песен» (подтверждение у пользователя
+        уже на стороне JS, здесь просто выполняем)."""
+        if self._any_lyrics_bulk_job_running():
+            self.lyricsBulkFailed.emit("Другая операция с текстами уже выполняется")
+            return
+        self.lyricsBulkStarted.emit()
+        self._clear_all_lyrics_worker = ClearAllLyricsWorker(drive=self.drive)
+        self._clear_all_lyrics_worker.progress.connect(self.lyricsBulkProgress.emit)
+        self._clear_all_lyrics_worker.finished_ok.connect(self._on_clear_all_lyrics_ok)
+        self._clear_all_lyrics_worker.finished_err.connect(self._on_lyrics_bulk_err)
+        self._clear_all_lyrics_worker.start()
+
+    def _on_clear_all_lyrics_ok(self, stats: dict):
+        self._emit_library()
+        self._update_ui_state()
+        text = f"Удалено текстов: {stats.get('cleared', 0)} из {stats.get('total', 0)}"
+        if stats.get("stopped"):
+            text = "Остановлено. " + text
+        self.lyricsBulkFinished.emit(text)
+
+    @pyqtSlot()
     def stopFindMissingLyrics(self):
         if self._lyrics_bulk_worker and self._lyrics_bulk_worker.isRunning():
             self._lyrics_bulk_worker.request_stop()
+            self.lyricsBulkProgress.emit("Останавливаю…")
+        if self._clear_all_lyrics_worker and self._clear_all_lyrics_worker.isRunning():
+            self._clear_all_lyrics_worker.request_stop()
             self.lyricsBulkProgress.emit("Останавливаю…")
 
     def _on_lyrics_bulk_ok(self, stats: dict):
         self._emit_library()
         self._update_ui_state()
-        text = (
-            f"Готово: найдено текстов {stats.get('found', 0)}, "
-            f"инструменталов {stats.get('instrumental', 0)}, "
-            f"ошибок {stats.get('failed', 0)} из {stats.get('total', 0)}"
-        )
+        if stats.get("mode") == "recheck_instrumental":
+            text = (
+                f"Готово: текст нашёлся у {stats.get('found', 0)} из {stats.get('total', 0)} "
+                f"ранее отмеченных инструменталом, "
+                f"подтверждено инструменталом {stats.get('instrumental', 0)}, "
+                f"ошибок {stats.get('failed', 0)}"
+            )
+        else:
+            text = (
+                f"Готово: найдено текстов {stats.get('found', 0)}, "
+                f"инструменталов {stats.get('instrumental', 0)}, "
+                f"ошибок {stats.get('failed', 0)} из {stats.get('total', 0)}"
+            )
         if stats.get("stopped"):
             text = "Остановлено. " + text
         self.lyricsBulkFinished.emit(text)

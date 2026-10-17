@@ -11,6 +11,7 @@ import subprocess
 
 from .blossom_error import Stage, fail
 from .paths import BASE_DIR
+from .proc_util import NO_WINDOW_FLAGS
 
 FPCALC_LENGTH_SECONDS = 120
 # Сколько чисел отпечатка сравнивать (948 чисел ~ 120 сек у этого алгоритма,
@@ -51,6 +52,7 @@ def compute_fingerprint(filepath: str) -> str:
             capture_output=True,
             text=True,
             timeout=60,
+            creationflags=NO_WINDOW_FLAGS,
         )
     except Exception as exc:
         fail(Stage.PIPELINE, "FINGERPRINT_RUN_FAIL", "Не удалось запустить fpcalc", str(exc))

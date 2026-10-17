@@ -446,10 +446,13 @@
                 </p>
                 <div id="lyrics-bulk-log" class="spotify-auto-log" style="max-height:160px"></div>
                 <p id="lyrics-bulk-status" class="import-status"></p>
-                <div class="file-row">
+                <div class="file-row" style="flex-wrap:wrap">
                     <button type="button" id="btn-lyrics-bulk-start" class="btn-modal btn-primary" onclick="startLyricsBulkSearch()">Найти текст песен без текста</button>
+                    <button type="button" id="btn-lyrics-bulk-recheck" class="btn-modal btn-secondary" onclick="startLyricsBulkRecheck()" title="Повторная проверка песен, уже помеченных инструменталом — на случай, если раньше текст у них не нашёлся по ошибке">Перепроверить инструменталы</button>
                     <button type="button" id="btn-lyrics-bulk-stop" class="btn-modal btn-ghost" onclick="stopLyricsBulkSearch()" disabled>Остановить</button>
                 </div>
+                <p class="hint-text" style="margin-top:10px">Удалить текст у одной песни — через «Изменить» в списке треков.</p>
+                <button type="button" id="btn-lyrics-clear-all" class="btn-modal btn-ghost" onclick="startClearAllLyrics()" style="color:#a13a55">Удалить текст у всех песен</button>
             </div>
 
             <div class="modal-actions">

@@ -1855,6 +1855,19 @@ function startLyricsBulkSearch() {
     pyBridge.findMissingLyrics();
 }
 
+function startLyricsBulkRecheck() {
+    if (!pyBridge || !pyBridge.recheckInstrumentalLyrics) return;
+    if (lyricsBulkRunning) return;
+    pyBridge.recheckInstrumentalLyrics();
+}
+
+function startClearAllLyrics() {
+    if (!pyBridge || !pyBridge.clearAllLyrics) return;
+    if (lyricsBulkRunning) return;
+    if (!confirm("Удалить текст у ВСЕХ песен в библиотеке? Это можно отменить только повторным поиском.")) return;
+    pyBridge.clearAllLyrics();
+}
+
 function stopLyricsBulkSearch() {
     if (pyBridge && pyBridge.stopFindMissingLyrics) pyBridge.stopFindMissingLyrics();
 }
@@ -1862,10 +1875,14 @@ function stopLyricsBulkSearch() {
 function setLyricsBulkLock(locked) {
     lyricsBulkRunning = locked;
     var startBtn = document.getElementById("btn-lyrics-bulk-start");
+    var recheckBtn = document.getElementById("btn-lyrics-bulk-recheck");
+    var clearAllBtn = document.getElementById("btn-lyrics-clear-all");
     var stopBtn = document.getElementById("btn-lyrics-bulk-stop");
     var applyBtn = document.getElementById("btn-settings-apply");
     var closeBtn = document.getElementById("btn-settings-close");
     if (startBtn) startBtn.disabled = locked;
+    if (recheckBtn) recheckBtn.disabled = locked;
+    if (clearAllBtn) clearAllBtn.disabled = locked;
     if (stopBtn) stopBtn.disabled = !locked;
     // Пока идёт поиск: "Применить" недоступен (чтобы не путать с настройками,
     // которые не относятся к поиску), а "Закрыть" становится "Скрыть" —

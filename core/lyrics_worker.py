@@ -55,9 +55,13 @@ class LyricsBulkWorker(QThread):
     finished_ok = pyqtSignal(dict)
     finished_err = pyqtSignal(dict)
 
-    def __init__(self, drive=None):
+    def __init__(self, drive=None, mode: str = "missing"):
         super().__init__()
         self.drive = drive
+        # "missing" — песни без текста; "recheck_instrumental" — повторная
+        # проверка уже помеченных инструментальными (на случай, если раньше
+        # их пометили так ошибочно — например, из-за бага скрейпинга Genius).
+        self.mode = mode
         self._stop_requested = False
 
     def request_stop(self):
@@ -76,7 +80,10 @@ class LyricsBulkWorker(QThread):
             })
 
     def _process_all(self) -> dict:
-        songs = db.get_songs_without_lyrics()
+        if self.mode == "recheck_instrumental":
+            songs = db.get_instrumental_songs()
+        else:
+            songs = db.get_songs_without_lyrics()
         total = len(songs)
         found = instrumental = failed = blocked_in_a_row = 0
         for idx, song in enumerate(songs, start=1):
@@ -114,9 +121,63 @@ class LyricsBulkWorker(QThread):
                 found += 1
             time.sleep(_BULK_DELAY_SECONDS)
         return {
+            "mode": self.mode,
             "total": total,
             "found": found,
             "instrumental": instrumental,
             "failed": failed,
+            "stopped": self._stop_requested,
+        }
+
+
+class ClearAllLyricsWorker(QThread):
+    """Настройки → «Удалить текст у всех песен»: массовая очистка текста
+    (включая метки инструментала) у всей библиотеки — например, чтобы
+    переразыскать всё заново после правки поиска текста."""
+
+    progress = pyqtSignal(str)
+    finished_ok = pyqtSignal(dict)
+    finished_err = pyqtSignal(dict)
+
+    def __init__(self, drive=None):
+        super().__init__()
+        self.drive = drive
+        self._stop_requested = False
+
+    def request_stop(self):
+        self._stop_requested = True
+
+    def run(self):
+        try:
+            stats = self._clear_all()
+            self.finished_ok.emit(stats)
+        except Exception as exc:
+            self.finished_err.emit({
+                "stage": "pipeline",
+                "code": "LYRICS_CLEAR_ALL_CRASH",
+                "message": "Ошибка при удалении текстов",
+                "detail": str(exc),
+            })
+
+    def _clear_all(self) -> dict:
+        songs = [
+            s for s in db.get_all_songs()
+            if (s.lyrics or "").strip() and (s.lyrics or "").strip() != db.DEFAULT_LYRICS_PLACEHOLDER
+        ]
+        total = len(songs)
+        cleared = 0
+        for idx, song in enumerate(songs, start=1):
+            if self._stop_requested:
+                break
+            title = strip_decor(song.title)
+            artist = strip_decor(song.artist)
+            self.progress.emit(f"({idx}/{total}) {artist} — {title}…")
+            db.update_song_lyrics(song.id, "")
+            if self.drive is not None:
+                push_song_meta(self.drive, song, title, artist, "")
+            cleared += 1
+        return {
+            "total": total,
+            "cleared": cleared,
             "stopped": self._stop_requested,
         }

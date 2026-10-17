@@ -217,6 +217,14 @@ def get_songs_without_lyrics() -> List[Song]:
     ]
 
 
+def get_instrumental_songs() -> List[Song]:
+    """Песни, помеченные инструментальными — для их повторной перепроверки
+    (например, после исправления бага поиска текста, из-за которого песни
+    с текстом ошибочно помечались инструментальными)."""
+    from .lyrics_service import INSTRUMENTAL_MARK
+    return [s for s in get_all_songs() if (s.lyrics or "").strip() == INSTRUMENTAL_MARK]
+
+
 def update_song_lyrics(song_id: int, lyrics: str) -> bool:
     conn = get_connection()
     cursor = conn.cursor()

@@ -14,6 +14,11 @@ REPO_DIR = Path(__file__).resolve().parent.parent
 STATE_FILE = REPO_DIR / ".git" / "autosave_state.txt"
 LOG_FILE = REPO_DIR / "autosave.log"
 
+# Задача запускается через pythonw.exe (без консоли) Планировщиком заданий —
+# без этого флага git.exe, как любая консольная программа без консоли-родителя,
+# на миг открывает собственное окно, которое видно как "мелькнувший cmd/git".
+_NO_WINDOW = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
+
 
 def run_git(*args: str) -> tuple[int, str]:
     result = subprocess.run(
@@ -21,6 +26,7 @@ def run_git(*args: str) -> tuple[int, str]:
         cwd=REPO_DIR,
         capture_output=True,
         text=True,
+        creationflags=_NO_WINDOW,
     )
     return result.returncode, (result.stdout + result.stderr).strip()
 

@@ -558,8 +558,13 @@ button.icon-btn {
 }
 
 .ico-play {
+    /* border-style не наследуется от .ico-prev/.ico-next (туда play не входил) —
+       без него border-width/border-color ничего не рисуют (стиль по умолчанию
+       none), поэтому иконка play никогда не отображалась, в отличие от pause
+       (у неё border-left/border-right — шорткоты, уже включающие solid). */
     width: 0;
     height: 0;
+    border-style: solid;
     border-width: 8px 0 8px 14px;
     border-color: transparent transparent transparent #6c5b7b;
     margin-left: 3px;
