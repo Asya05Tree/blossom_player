@@ -1,5 +1,6 @@
 import mimetypes
 import os
+import threading
 from typing import Optional
 
 from google.auth.transport.requests import Request
@@ -31,6 +32,17 @@ class BlossomDriveManager:
         self.root_folder_id: Optional[str] = None
         self.subfolder_ids: dict[str, str] = {}
         self.user_email: str = ""
+        # self.service (googleapiclient + httplib2) не потокобезопасен — он
+        # один общий экземпляр, но вызывается из многих разных QThread-воркеров
+        # (ClearAllLyricsWorker, DriveSyncWorker, DriveUploadWorker и т.д.).
+        # Запуск двух таких воркеров одновременно (например, "Удалить текст у
+        # всех песен" + параллельный "Синхронизировать с Drive") приводил к
+        # гонке на уровне httplib2/SSL-сокета и настоящему краху процесса
+        # (см. память crash_debugging — подтверждено по crash_trace.log:
+        # оба потока одновременно стояли в ssl.py:read()). RLock (не Lock) —
+        # потому что некоторые методы вызывают друг друга изнутри (upload_json
+        # → upload_file), и один и тот же поток должен суметь взять лок повторно.
+        self._lock = threading.RLock()
 
     def _token_file(self) -> str:
         return _resolve_config_path(GOOGLE_TOKEN_FILE, "token.json")
@@ -50,7 +62,8 @@ class BlossomDriveManager:
     def _fetch_user_email(self) -> str:
         self._require_service()
         try:
-            about = self.service.about().get(fields="user(emailAddress)").execute()
+            with self._lock:
+                about = self.service.about().get(fields="user(emailAddress)").execute()
             user = about.get("user") or {}
             return (user.get("emailAddress") or "").strip()
         except Exception as exc:
@@ -95,15 +108,16 @@ class BlossomDriveManager:
             except OSError:
                 pass
         try:
-            service = build("drive", "v3", credentials=creds, cache_discovery=False)
-            # Реальный вызов API — единственная честная проверка доступа
-            about = service.about().get(fields="user(emailAddress)").execute()
-            self.service = service
-            self.user_email = ((about.get("user") or {}).get("emailAddress") or "").strip()
-            self.root_folder_id = self._get_or_create_folder(ROOT_FOLDER_NAME, None)
-            self.subfolder_ids = {}
-            for name in SUBFOLDERS:
-                self.subfolder_ids[name] = self._get_or_create_folder(name, self.root_folder_id)
+            with self._lock:
+                service = build("drive", "v3", credentials=creds, cache_discovery=False)
+                # Реальный вызов API — единственная честная проверка доступа
+                about = service.about().get(fields="user(emailAddress)").execute()
+                self.service = service
+                self.user_email = ((about.get("user") or {}).get("emailAddress") or "").strip()
+                self.root_folder_id = self._get_or_create_folder(ROOT_FOLDER_NAME, None)
+                self.subfolder_ids = {}
+                for name in SUBFOLDERS:
+                    self.subfolder_ids[name] = self._get_or_create_folder(name, self.root_folder_id)
             return True
         except Exception:
             self.service = None
@@ -183,12 +197,13 @@ class BlossomDriveManager:
                 token.write(creds.to_json())
 
         try:
-            self.service = build("drive", "v3", credentials=creds, cache_discovery=False)
-            self.root_folder_id = self._get_or_create_folder(ROOT_FOLDER_NAME, None)
-            self.subfolder_ids = {}
-            for name in SUBFOLDERS:
-                self.subfolder_ids[name] = self._get_or_create_folder(name, self.root_folder_id)
-            self.user_email = self._fetch_user_email()
+            with self._lock:
+                self.service = build("drive", "v3", credentials=creds, cache_discovery=False)
+                self.root_folder_id = self._get_or_create_folder(ROOT_FOLDER_NAME, None)
+                self.subfolder_ids = {}
+                for name in SUBFOLDERS:
+                    self.subfolder_ids[name] = self._get_or_create_folder(name, self.root_folder_id)
+                self.user_email = self._fetch_user_email()
             return True
         except Exception as exc:
             fail(Stage.DRIVE_AUTH, "DRIVE_API_INIT_FAIL", "Не удалось инициализировать Drive API", str(exc))
@@ -202,27 +217,28 @@ class BlossomDriveManager:
         )
         if parent_id:
             query += f" and '{parent_id}' in parents"
-        try:
-            response = self.service.files().list(q=query, fields="files(id, name)", pageSize=5).execute()
-        except Exception as exc:
-            fail(Stage.DRIVE_FOLDER, "DRIVE_LIST_FAIL", f"Не удалось искать папку {folder_name}", str(exc))
-        files = response.get("files") or []
-        if files:
-            folder_id = files[0].get("id")
+        with self._lock:
+            try:
+                response = self.service.files().list(q=query, fields="files(id, name)", pageSize=5).execute()
+            except Exception as exc:
+                fail(Stage.DRIVE_FOLDER, "DRIVE_LIST_FAIL", f"Не удалось искать папку {folder_name}", str(exc))
+            files = response.get("files") or []
+            if files:
+                folder_id = files[0].get("id")
+                if not folder_id:
+                    fail(Stage.DRIVE_FOLDER, "DRIVE_FOLDER_ID_EMPTY", f"Папка {folder_name} без id")
+                return folder_id
+            meta = {"name": folder_name, "mimeType": "application/vnd.google-apps.folder"}
+            if parent_id:
+                meta["parents"] = [parent_id]
+            try:
+                created = self.service.files().create(body=meta, fields="id").execute()
+            except Exception as exc:
+                fail(Stage.DRIVE_FOLDER, "DRIVE_FOLDER_CREATE_FAIL", f"Не удалось создать папку {folder_name}", str(exc))
+            folder_id = created.get("id")
             if not folder_id:
-                fail(Stage.DRIVE_FOLDER, "DRIVE_FOLDER_ID_EMPTY", f"Папка {folder_name} без id")
+                fail(Stage.DRIVE_FOLDER, "DRIVE_CREATED_ID_EMPTY", f"Создана папка без id: {folder_name}")
             return folder_id
-        meta = {"name": folder_name, "mimeType": "application/vnd.google-apps.folder"}
-        if parent_id:
-            meta["parents"] = [parent_id]
-        try:
-            created = self.service.files().create(body=meta, fields="id").execute()
-        except Exception as exc:
-            fail(Stage.DRIVE_FOLDER, "DRIVE_FOLDER_CREATE_FAIL", f"Не удалось создать папку {folder_name}", str(exc))
-        folder_id = created.get("id")
-        if not folder_id:
-            fail(Stage.DRIVE_FOLDER, "DRIVE_CREATED_ID_EMPTY", f"Создана папка без id: {folder_name}")
-        return folder_id
 
     def upload_file(
         self,
@@ -248,15 +264,16 @@ class BlossomDriveManager:
 
         meta = {"name": filename, "parents": [parent_id]}
         media = MediaFileUpload(local_path, mimetype=mime, resumable=True)
-        try:
-            drive_file = self.service.files().create(body=meta, media_body=media, fields="id, name").execute()
-        except Exception as exc:
-            fail(
-                Stage.DRIVE_UPLOAD,
-                "DRIVE_UPLOAD_FAIL",
-                f"Ошибка загрузки {filename} в {folder_key}",
-                str(exc),
-            )
+        with self._lock:
+            try:
+                drive_file = self.service.files().create(body=meta, media_body=media, fields="id, name").execute()
+            except Exception as exc:
+                fail(
+                    Stage.DRIVE_UPLOAD,
+                    "DRIVE_UPLOAD_FAIL",
+                    f"Ошибка загрузки {filename} в {folder_key}",
+                    str(exc),
+                )
         file_id = drive_file.get("id")
         if not file_id:
             fail(Stage.DRIVE_UPLOAD, "DRIVE_UPLOAD_ID_EMPTY", "Google Drive не вернул id файла", filename)
@@ -266,13 +283,14 @@ class BlossomDriveManager:
         self._require_service()
         from googleapiclient.http import MediaIoBaseDownload
         import io
-        request = self.service.files().get_media(fileId=file_id)
         os.makedirs(os.path.dirname(local_path), exist_ok=True)
-        with open(local_path, "wb") as fh:
-            downloader = MediaIoBaseDownload(fh, request)
-            done = False
-            while not done:
-                _, done = downloader.next_chunk()
+        with self._lock:
+            request = self.service.files().get_media(fileId=file_id)
+            with open(local_path, "wb") as fh:
+                downloader = MediaIoBaseDownload(fh, request)
+                done = False
+                while not done:
+                    _, done = downloader.next_chunk()
         return local_path
 
     def list_files_in_folder(self, folder_key: str) -> list:
@@ -282,17 +300,18 @@ class BlossomDriveManager:
         parent_id = self.subfolder_ids[folder_key]
         results = []
         page_token = None
-        while True:
-            resp = self.service.files().list(
-                q=f"'{parent_id}' in parents and trashed = false",
-                fields="nextPageToken, files(id, name, mimeType, size)",
-                pageSize=100,
-                pageToken=page_token,
-            ).execute()
-            results.extend(resp.get("files", []))
-            page_token = resp.get("nextPageToken")
-            if not page_token:
-                break
+        with self._lock:
+            while True:
+                resp = self.service.files().list(
+                    q=f"'{parent_id}' in parents and trashed = false",
+                    fields="nextPageToken, files(id, name, mimeType, size)",
+                    pageSize=100,
+                    pageToken=page_token,
+                ).execute()
+                results.extend(resp.get("files", []))
+                page_token = resp.get("nextPageToken")
+                if not page_token:
+                    break
         return results
 
     def find_file_in_folder(self, folder_key: str, filename: str) -> Optional[str]:
@@ -306,7 +325,8 @@ class BlossomDriveManager:
         if not file_id:
             return False
         try:
-            self.service.files().delete(fileId=file_id).execute()
+            with self._lock:
+                self.service.files().delete(fileId=file_id).execute()
             return True
         except Exception:
             return False
@@ -315,12 +335,13 @@ class BlossomDriveManager:
         self._require_service()
         import io
         from googleapiclient.http import MediaIoBaseDownload
-        request = self.service.files().get_media(fileId=file_id)
-        buffer = io.BytesIO()
-        downloader = MediaIoBaseDownload(buffer, request)
-        done = False
-        while not done:
-            _, done = downloader.next_chunk()
+        with self._lock:
+            request = self.service.files().get_media(fileId=file_id)
+            buffer = io.BytesIO()
+            downloader = MediaIoBaseDownload(buffer, request)
+            done = False
+            while not done:
+                _, done = downloader.next_chunk()
         return buffer.getvalue().decode("utf-8")
 
     def upload_json(self, data: dict, drive_filename: str, folder_key: str = "Meta") -> str:
@@ -339,7 +360,8 @@ class BlossomDriveManager:
         if not mime:
             mime = "application/octet-stream"
         media = MediaFileUpload(local_path, mimetype=mime, resumable=True)
-        self.service.files().update(fileId=file_id, media_body=media).execute()
+        with self._lock:
+            self.service.files().update(fileId=file_id, media_body=media).execute()
         return file_id
 
     def upload_text(self, text: str, drive_filename: str, folder_key: str = "Lyrics") -> str:

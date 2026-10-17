@@ -38,5 +38,8 @@ __pycache__/
 build/
 dist/
 
+# Runtime marker for crash detection (core/crash_log.py) — not code
+.blossom_running
+
 # Local-only Claude Code settings
 .claude/settings.local.json

@@ -26,8 +26,13 @@ import core.database as db
 from core.player import BlossomPlayer
 from core.drive import BlossomDriveManager
 from core.bridge import BlossomBridge
+from core.crash_log import install as install_crash_log, had_previous_crash, mark_running, mark_clean_exit
 
 MAX_CLOSE_WAIT_SECONDS = 20
+
+_CRASHED_LAST_RUN = had_previous_crash()
+CRASH_LOG_PATH = install_crash_log()
+mark_running()
 
 
 class BlossomWindow(QMainWindow):
@@ -80,6 +85,11 @@ class BlossomWindow(QMainWindow):
             self.bridge._update_ui_state()
             self.bridge._emit_library()
             self.bridge._emit_playlists()
+            if _CRASHED_LAST_RUN:
+                self.bridge.toastMessage.emit(
+                    f"Прошлый запуск завершился с ошибкой — подробности в {os.path.basename(CRASH_LOG_PATH)}",
+                    True,
+                )
 
         self.browser.loadFinished.connect(lambda: QTimer.singleShot(300, on_ready))
 
@@ -117,4 +127,6 @@ if __name__ == "__main__":
     app.setApplicationName("Blossom Player")
     window = BlossomWindow()
     window.show()
-    sys.exit(app.exec())
+    exit_code = app.exec()
+    mark_clean_exit()
+    sys.exit(exit_code)
