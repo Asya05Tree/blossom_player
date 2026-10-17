@@ -9,6 +9,8 @@ a = Analysis(
     datas=[
         ('ui', 'ui'),         # Упаковываем интерфейс index.html
         ('assets', 'assets'), # Упаковываем папки картинок и треков
+        ('ffmpeg', 'ffmpeg'), # ffmpeg.exe/ffprobe.exe — нужны yt-dlp/spotdl без системной установки
+        ('tools', 'tools'),   # fpcalc.exe (отпечатки для дублей) + deno.exe (JS-испытания YouTube)
     ],
     hiddenimports=[
         'PyQt6.QtWebEngineWidgets',

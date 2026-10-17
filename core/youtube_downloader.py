@@ -8,6 +8,7 @@ from mutagen.id3 import ID3NoHeaderError
 from yt_dlp import YoutubeDL
 
 from .blossom_error import Stage, fail
+from .deno_util import resolve_deno
 from .ffmpeg_util import resolve_ffmpeg
 from .paths import DOWNLOADS_DIR, TEMP_DIR, ensure_disk_space
 
@@ -18,6 +19,15 @@ VIDEO_ID_RE = re.compile(
 # Клиент "android" меньше подвержен антибот-проверке YouTube ("Sign in to confirm
 # you're not a bot"), в отличие от дефолтного веб-клиента yt-dlp.
 _RESILIENT_EXTRACTOR_ARGS = {"youtube": {"player_client": ["android", "web"]}}
+
+
+def _js_runtime_opts() -> dict:
+    """yt-dlp теперь решает JS-испытания YouTube через Deno — без него львиная
+    доля треков падает с AudioProviderError. См. core/deno_util.py."""
+    deno_path = resolve_deno()
+    if not deno_path:
+        return {}
+    return {"js_runtimes": {"deno": {"path": deno_path}}}
 
 
 def extract_video_id(url: str) -> str:
@@ -64,6 +74,7 @@ def download_youtube_audio(url: str) -> dict[str, Any]:
         "noplaylist": True,
         "noprogress": True,
         "extractor_args": _RESILIENT_EXTRACTOR_ARGS,
+        **_js_runtime_opts(),
     }
     try:
         with YoutubeDL(ydl_opts) as ydl:
@@ -111,6 +122,7 @@ def search_youtube_top_result(query: str) -> dict[str, Any]:
         "extract_flat": True,
         "noplaylist": True,
         "extractor_args": _RESILIENT_EXTRACTOR_ARGS,
+        **_js_runtime_opts(),
     }
     try:
         with YoutubeDL(ydl_opts) as ydl:
@@ -160,6 +172,7 @@ def list_channel_or_playlist_videos(url: str, limit: int = 50) -> dict[str, Any]
         "extract_flat": True,
         "playlistend": limit,
         "extractor_args": _RESILIENT_EXTRACTOR_ARGS,
+        **_js_runtime_opts(),
     }
     try:
         with YoutubeDL(ydl_opts) as ydl:

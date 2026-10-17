@@ -2,6 +2,7 @@ import os
 from typing import Any, Optional
 
 from .blossom_error import Stage, fail
+from .deno_util import resolve_deno
 from .paths import DOWNLOADS_DIR, TEMP_DIR
 from .spotify_service import load_client_config, normalize_track_url
 from .ffmpeg_util import resolve_ffmpeg
@@ -31,6 +32,14 @@ def get_spotdl_client():
     _ensure_dir(DOWNLOADS_DIR, "DOWNLOAD_DIR_CREATE_FAIL")
     _ensure_dir(TEMP_DIR, "TEMP_DIR_CREATE_FAIL")
     output_template = os.path.join(DOWNLOADS_DIR, "{artist} - {title}.{output-ext}")
+    deno_path = resolve_deno()
+    # player_client=android,web — тот же обход "Sign in to confirm you're not
+    # a bot"/SABR-only стриминга, что уже используется для прямых YouTube-ссылок
+    # в core/youtube_downloader.py. Без него веб-клиент yt-dlp внутри spotdl
+    # эту проверку не проходит и падает AudioProviderError почти на каждом треке.
+    yt_dlp_args = '-f bestaudio/worst --retries 2 --extractor-args "youtube:player_client=android,web"'
+    if deno_path:
+        yt_dlp_args += f" --js-runtimes deno:{deno_path.replace(os.sep, '/')}"
     _spotdl_instance = Spotdl(
         client_id=cfg["client_id"],
         client_secret=cfg["client_secret"],
@@ -51,7 +60,12 @@ def get_spotdl_client():
             # при массовом импорте (SpotifyLibraryWorker) "Остановить" проверяется
             # только МЕЖДУ треками, так что чем дольше yt-dlp бьётся за один
             # сбойный трек, тем дольше кажется, что остановка не работает.
-            "yt_dlp_args": "-f bestaudio/worst --retries 2",
+            # "--js-runtimes deno:<путь>" — без Deno yt-dlp не может решить новые
+            # JS-испытания YouTube и почти каждый трек падает с AudioProviderError
+            # ("Some YouTube downloads require Deno…"); используем свою копию из
+            # tools/deno (core/deno_util.py), путь — с «/», т.к. yt_dlp_args сам
+            # разбирается через shlex.split, а обратный слэш там — escape-символ.
+            "yt_dlp_args": yt_dlp_args,
             # spotdl по умолчанию САМ ищет текст на genius/azlyrics/musixmatch и
             # сам скачивает обложку для каждого трека — лишние сетевые запросы
             # (у нас уже есть свой поиск текста в core/lyrics_service.py и своя
