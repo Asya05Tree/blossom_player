@@ -480,6 +480,26 @@ function wireBridgeSignals() {
         });
     }
 
+    if (pyBridge.heavyJobsChanged) {
+        pyBridge.heavyJobsChanged.connect(function(active) {
+            setGlobalUiLock(active);
+        });
+    }
+
+    if (pyBridge.onlineSearchReady) {
+        pyBridge.onlineSearchReady.connect(function(json) {
+            var data = {};
+            try { data = typeof json === "string" ? JSON.parse(json) : json; } catch (e) {}
+            _renderOnlineSearchResults(data);
+        });
+    }
+
+    if (pyBridge.onlineSearchFailed) {
+        pyBridge.onlineSearchFailed.connect(function(msg) {
+            document.getElementById("online-search-status").innerText = msg;
+        });
+    }
+
     if (pyBridge.positionChanged) {
         pyBridge.positionChanged.connect(function(pos, dur) {
             updateProgressBar(pos, dur);
@@ -668,11 +688,25 @@ function renderLibrary(json) {
     const list = document.getElementById("song-list");
     if (!list) return;
     list.innerHTML = "";
-    const sortedSongs = sortLibrarySongs(librarySongs, getLibrarySortMode());
     if (!librarySongs.length) {
         list.innerHTML = "<p style='font-size:12px;color:#9a86a4;padding:8px'>Пока нет треков</p>";
         return;
     }
+    const searchEl = document.getElementById("library-search");
+    const query = searchEl ? searchEl.value.trim().toLowerCase() : "";
+    var matched = librarySongs;
+    if (query) {
+        matched = librarySongs.filter(function(s) {
+            var title = (s.title_raw || s.title || "").toLowerCase();
+            var artist = (s.artist_raw || s.artist || "").toLowerCase();
+            return title.indexOf(query) !== -1 || artist.indexOf(query) !== -1;
+        });
+    }
+    if (!matched.length) {
+        list.innerHTML = "<p style='font-size:12px;color:#9a86a4;padding:8px'>Ничего не найдено</p>";
+        return;
+    }
+    const sortedSongs = sortLibrarySongs(matched, getLibrarySortMode());
     sortedSongs.forEach(function(s) {
         const row = document.createElement("div");
         row.className = "song-item song-row-clickable";
@@ -911,6 +945,17 @@ function setImportStatus(text, isError, isOk) {
     if (!el) return;
     el.innerText = text || "";
     el.className = "import-status" + (isError ? " error" : isOk ? " ok" : "");
+}
+
+var _globalUiLocked = false;
+
+function setGlobalUiLock(locked) {
+    if (locked === _globalUiLocked) return;
+    _globalUiLocked = locked;
+    document.body.classList.toggle("ui-locked", locked);
+    if (locked) {
+        showToast("Библиотека временно заблокирована — идёт загрузка или работа с текстами песен", false);
+    }
 }
 
 function setPlaybackControlsEnabled(enabled) {
@@ -1349,6 +1394,75 @@ function setArtistImportStatus(text, isError, isOk) {
     if (!el) return;
     el.innerText = text || "";
     el.className = "import-status" + (isError ? " error" : isOk ? " ok" : "");
+}
+
+/* === Поиск трека на YouTube/Spotify с выбором из нескольких результатов === */
+
+function openOnlineSearchModal() {
+    document.getElementById("add-menu").classList.add("hidden");
+    document.getElementById("online-search-query").value = "";
+    document.getElementById("online-search-results").innerHTML = "";
+    document.getElementById("online-search-status").innerText = "";
+    document.getElementById("online-search-modal").style.display = "flex";
+}
+
+function closeOnlineSearchModal() {
+    document.getElementById("online-search-modal").style.display = "none";
+}
+
+function runOnlineSearch() {
+    if (!pyBridge || !pyBridge.searchOnline) return;
+    const query = document.getElementById("online-search-query").value.trim();
+    if (!query) return;
+    document.getElementById("online-search-results").innerHTML = "";
+    document.getElementById("online-search-status").innerText = "Ищу…";
+    pyBridge.searchOnline(query);
+}
+
+function formatDuration(seconds) {
+    seconds = Math.round(seconds || 0);
+    var m = Math.floor(seconds / 60);
+    var s = seconds % 60;
+    return m + ":" + (s < 10 ? "0" : "") + s;
+}
+
+function _renderOnlineSearchResults(data) {
+    var box = document.getElementById("online-search-results");
+    document.getElementById("online-search-status").innerText = "";
+    box.innerHTML = "";
+    var youtube = data.youtube || [];
+    var spotify = data.spotify || [];
+    if (!youtube.length && !spotify.length) {
+        box.innerHTML = "<p style='font-size:12px;color:#9a86a4'>Ничего не найдено</p>";
+        return;
+    }
+    function section(title, items, onImport, subFn) {
+        if (!items.length) return;
+        var h = document.createElement("div");
+        h.className = "online-search-group-title";
+        h.innerText = title;
+        box.appendChild(h);
+        items.forEach(function(item) {
+            var row = document.createElement("div");
+            row.className = "online-search-row";
+            row.innerHTML =
+                "<div><div class='online-search-row-info'>" + escapeHtml(item.title || "") + "</div>" +
+                "<div class='online-search-row-sub'>" + escapeHtml(subFn(item)) + "</div></div>" +
+                "<button type='button' class='btn-modal btn-secondary'>Добавить</button>";
+            row.querySelector("button").onclick = function() { onImport(item); };
+            box.appendChild(row);
+        });
+    }
+    section("YouTube", youtube, function(item) {
+        pyBridge.importFromYoutube(item.url, "", "", driveLoggedIn);
+        closeOnlineSearchModal();
+        showToast("Скачиваю: " + item.title, false);
+    }, function(item) { return (item.channel || "") + " · " + formatDuration(item.duration); });
+    section("Spotify", spotify, function(item) {
+        pyBridge.importFromSpotify(item.url, "", "", driveLoggedIn);
+        closeOnlineSearchModal();
+        showToast("Скачиваю: " + item.title, false);
+    }, function(item) { return item.artist || ""; });
 }
 
 /* === YouTube channel/playlist bulk import === */

@@ -111,8 +111,9 @@ def download_youtube_audio(url: str) -> dict[str, Any]:
     }
 
 
-def search_youtube_top_result(query: str) -> dict[str, Any]:
-    """Возвращает лучший результат поиска YouTube по текстовому запросу (без скачивания)."""
+def search_youtube_results(query: str, limit: int = 8) -> list[dict[str, Any]]:
+    """Возвращает до limit результатов поиска YouTube по текстовому запросу
+    (без скачивания) — для UI, где пользователь сам выбирает нужное видео."""
     clean_query = (query or "").strip()
     if not clean_query:
         fail(Stage.YOUTUBE_DOWNLOAD, "YOUTUBE_SEARCH_QUERY_EMPTY", "Пустой поисковый запрос")
@@ -126,24 +127,32 @@ def search_youtube_top_result(query: str) -> dict[str, Any]:
     }
     try:
         with YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(f"ytsearch1:{clean_query}", download=False)
+            info = ydl.extract_info(f"ytsearch{max(1, limit)}:{clean_query}", download=False)
     except Exception as exc:
         fail(Stage.YOUTUBE_DOWNLOAD, "YOUTUBE_SEARCH_FAIL", "Не удалось выполнить поиск на YouTube", str(exc))
 
     entries = (info or {}).get("entries") or ([info] if info and info.get("id") else [])
-    if not entries:
-        fail(Stage.YOUTUBE_DOWNLOAD, "YOUTUBE_SEARCH_EMPTY", "Поиск не дал результатов", clean_query)
-    top = entries[0]
-    video_id = top.get("id") or ""
-    if not video_id:
-        fail(Stage.YOUTUBE_DOWNLOAD, "YOUTUBE_SEARCH_EMPTY", "Поиск не дал результатов", clean_query)
-    return {
-        "id": video_id,
-        "title": (top.get("title") or "").strip(),
-        "url": top.get("url") or f"https://www.youtube.com/watch?v={video_id}",
-        "duration": top.get("duration") or 0,
-        "channel": (top.get("channel") or top.get("uploader") or "").strip(),
-    }
+    out = []
+    for entry in entries[:limit]:
+        video_id = entry.get("id") or ""
+        if not video_id:
+            continue
+        out.append({
+            "id": video_id,
+            "title": (entry.get("title") or "").strip(),
+            "url": entry.get("url") or f"https://www.youtube.com/watch?v={video_id}",
+            "duration": entry.get("duration") or 0,
+            "channel": (entry.get("channel") or entry.get("uploader") or "").strip(),
+        })
+    return out
+
+
+def search_youtube_top_result(query: str) -> dict[str, Any]:
+    """Возвращает лучший результат поиска YouTube по текстовому запросу (без скачивания)."""
+    results = search_youtube_results(query, limit=1)
+    if not results:
+        fail(Stage.YOUTUBE_DOWNLOAD, "YOUTUBE_SEARCH_EMPTY", "Поиск не дал результатов", (query or "").strip())
+    return results[0]
 
 
 def list_channel_or_playlist_videos(url: str, limit: int = 50) -> dict[str, Any]:

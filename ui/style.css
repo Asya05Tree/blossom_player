@@ -676,6 +676,20 @@ button.icon-btn {
     display: none;
 }
 
+/* Пока идёт работа с текстами песен или скачивание — библиотека/плеер
+   заблокированы (см. heavyJobsChanged в bridge.py), чтобы переключение
+   песен не гонялось с фоновым воркером за одни и те же ресурсы (Drive API,
+   БД). Модалки (z-index выше) и их кнопки "Остановить" сюда не попадают —
+   их это не касается. */
+body.ui-locked #library-panel,
+body.ui-locked .controls,
+body.ui-locked .bottom-bar,
+body.ui-locked .fab-zone,
+body.ui-locked .progress-bar-container {
+    pointer-events: none;
+    opacity: 0.55;
+}
+
 .btn-modal.hidden {
     display: none;
 }
@@ -1007,6 +1021,45 @@ button.icon-btn {
     font-size: 12px;
     min-height: 18px;
     color: #7e57c2;
+}
+
+.online-search-results {
+    max-height: 320px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.online-search-group-title {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #9a86a4;
+    margin: 6px 0 2px;
+}
+
+.online-search-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    background: #faf7fc;
+    border-radius: 10px;
+    padding: 8px 10px;
+}
+
+.online-search-row-info {
+    font-size: 12px;
+    color: #4a3e56;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.online-search-row-sub {
+    font-size: 11px;
+    color: #9a86a4;
 }
 
 .import-status.error {

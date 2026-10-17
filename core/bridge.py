@@ -1,6 +1,6 @@
 import json
 import os
-from PyQt6.QtCore import QObject, pyqtSlot, pyqtSignal
+from PyQt6.QtCore import QObject, pyqtSlot, pyqtSignal, QTimer
 from PyQt6.QtWidgets import QApplication, QFileDialog
 from .models import Song, Playlist
 from . import database as db
@@ -23,7 +23,9 @@ from .ocr_worker import OcrWorker
 from .text_search_worker import TextSearchDownloadWorker
 from .shazam_worker import ShazamWorker
 from .lyrics_worker import LyricsPreviewWorker, LyricsBulkWorker, ClearAllLyricsWorker, SyncedLyricsWorker
+from .online_search_worker import OnlineSearchWorker
 from .drive_meta_sync import push_song_meta
+from .fingerprint_util import compute_fingerprint, fingerprint_duration, fingerprint_similarity, DEFAULT_DUPLICATE_THRESHOLD
 from typing import Optional
 from .text_style import strip_decor, wrap_artist, wrap_title
 
@@ -86,6 +88,9 @@ class BlossomBridge(QObject):
     lyricsBulkFinished = pyqtSignal(str)
     lyricsBulkFailed = pyqtSignal(str)
     syncedLyricsReady = pyqtSignal(int, str)
+    onlineSearchReady = pyqtSignal(str)
+    onlineSearchFailed = pyqtSignal(str)
+    heavyJobsChanged = pyqtSignal(bool)
 
     def __init__(self, player: BlossomPlayer, drive: BlossomDriveManager):
         super().__init__()
@@ -112,11 +117,23 @@ class BlossomBridge(QObject):
         self._clear_all_lyrics_worker = None
         self._synced_lyrics_worker = None
         self._synced_lyrics_tried_song_id = None
+        self._online_search_worker = None
         db.init_db()
         self.player.player.positionChanged.connect(self._on_position_changed)
         self.player.player.durationChanged.connect(self._on_duration_changed)
         self.player.player.mediaStatusChanged.connect(self._on_media_status_changed)
         self._last_duration = 0
+
+        # Пока идёт работа с текстами песен или скачивание — блокируем клики по
+        # библиотеке/плеер на фронтенде (см. heavyJobsChanged в script.js):
+        # параллельное переключение песен во время таких операций уже роняло
+        # приложение. Опрос таймером, а не хук на каждый старт воркера —
+        # не нужно трогать десяток разных мест, где воркеры запускаются.
+        self._heavy_jobs_active = False
+        self._heavy_lock_timer = QTimer(self)
+        self._heavy_lock_timer.setInterval(400)
+        self._heavy_lock_timer.timeout.connect(self._check_heavy_jobs)
+        self._heavy_lock_timer.start()
 
     _JOB_WORKER_ATTRS = (
         "_drive_verify_worker", "_drive_login_worker", "_sync_worker", "_drive_upload_worker",
@@ -124,8 +141,30 @@ class BlossomBridge(QObject):
         "_instrumental_search_worker", "_instrumental_download_worker", "_ocr_worker",
         "_text_search_worker", "_shazam_worker", "_duplicate_finder_worker", "_spotify_library_worker",
         "_lyrics_preview_worker", "_lyrics_bulk_worker", "_clear_all_lyrics_worker",
-        "_synced_lyrics_worker",
+        "_synced_lyrics_worker", "_online_search_worker",
     )
+
+    # Подмножество _JOB_WORKER_ATTRS, которое блокирует клики по библиотеке —
+    # только "работа с текстами песен или загрузка" в точном смысле просьбы
+    # пользователя. Лёгкие фоновые штуки (авто-поиск караоке-текста, OCR,
+    # поиск дублей — у них своя модалка со Stop) сюда не входят, иначе
+    # библиотека блокировалась бы почти постоянно без всякой пользы.
+    _HEAVY_LOCK_WORKER_ATTRS = (
+        "_lyrics_bulk_worker", "_clear_all_lyrics_worker",
+        "_import_worker", "_youtube_import_worker", "_artist_import_worker",
+        "_youtube_channel_worker", "_spotify_library_worker",
+        "_instrumental_download_worker", "_text_search_worker", "_shazam_worker",
+        "_sync_worker", "_drive_upload_worker",
+    )
+
+    def _check_heavy_jobs(self):
+        active = any(
+            getattr(self, name, None) is not None and getattr(self, name).isRunning()
+            for name in self._HEAVY_LOCK_WORKER_ATTRS
+        )
+        if active != self._heavy_jobs_active:
+            self._heavy_jobs_active = active
+            self.heavyJobsChanged.emit(active)
 
     def _active_jobs(self) -> list:
         workers = []
@@ -690,6 +729,29 @@ class BlossomBridge(QObject):
         if not filepath or not os.path.isfile(filepath):
             self.toastMessage.emit("Файл не найден — выбери снова", True)
             return
+
+        # Дубль по ЗВУКУ, а не по названию/автору — название в файле может
+        # быть любым, но если это тот же самый трек (тот же отпечаток
+        # Chromaprint), добавлять его второй раз не нужно. Тот же порог и
+        # способ сравнения, что в core/duplicate_finder_worker.py.
+        new_fp = ""
+        try:
+            new_fp = compute_fingerprint(filepath)
+        except Exception:
+            pass
+        if new_fp:
+            new_duration = fingerprint_duration(new_fp)
+            for existing in db.get_all_songs():
+                if not existing.fingerprint:
+                    continue
+                if new_duration and abs(fingerprint_duration(existing.fingerprint) - new_duration) > 2.0:
+                    continue
+                if fingerprint_similarity(new_fp, existing.fingerprint) >= DEFAULT_DUPLICATE_THRESHOLD:
+                    self.toastMessage.emit(
+                        f"Эта песня уже есть в библиотеке: «{existing.title}» — не добавляю повторно", True,
+                    )
+                    return
+
         raw_title = (title or os.path.splitext(os.path.basename(filepath))[0]).strip()
         raw_artist = (artist or "Unknown Artist").strip()
         try:
@@ -699,6 +761,7 @@ class BlossomBridge(QObject):
                 filepath=filepath,
                 lyrics=(lyrics or "").strip() or DEFAULT_LYRICS,
                 video_link="",
+                fingerprint=new_fp or None,
             )
         except Exception as exc:
             self.toastMessage.emit(str(exc), True)
@@ -1038,6 +1101,23 @@ class BlossomBridge(QObject):
         code = err.get("code", "UNKNOWN")
         message = err.get("message", "Не удалось скачать")
         self.textSearchFailed.emit(f"[{stage}:{code}] {message}")
+
+    @pyqtSlot(str)
+    def searchOnline(self, query):
+        """Поиск трека по тексту на YouTube и Spotify — показывает оба списка
+        результатов, пользователь сам выбирает что импортировать (через уже
+        существующие importFromYoutube/importFromSpotify)."""
+        if self._online_search_worker and self._online_search_worker.isRunning():
+            self.onlineSearchFailed.emit("Поиск уже выполняется")
+            return
+        self._online_search_worker = OnlineSearchWorker(query)
+        self._online_search_worker.finished_ok.connect(
+            lambda payload: self.onlineSearchReady.emit(json.dumps(payload, ensure_ascii=False))
+        )
+        self._online_search_worker.finished_err.connect(
+            lambda err: self.onlineSearchFailed.emit(err.get("message") or "Не удалось выполнить поиск")
+        )
+        self._online_search_worker.start()
 
     @pyqtSlot(float, str)
     def startShazamListen(self, listen_seconds, source="mic"):
