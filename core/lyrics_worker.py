@@ -1,8 +1,18 @@
+import time
+
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from . import database as db
+from .drive_meta_sync import push_song_meta
 from .lyrics_service import INSTRUMENTAL_MARK, resolve_lyrics_for_song
 from .text_style import strip_decor
+
+# Пауза между песнями в массовом поиске — чтобы не долбить Genius пачкой
+# запросов подряд (повышает риск временной блокировки) и не прогонять через
+# Shazam-фолбэк десятки треков без паузы (см. use_shazam_fallback=False ниже —
+# shazamio-core нативный, и многократные быстрые вызовы подряд из фонового
+# потока — вероятная причина периодических жёстких крашей приложения).
+_BULK_DELAY_SECONDS = 1.0
 
 
 class LyricsPreviewWorker(QThread):
@@ -20,6 +30,13 @@ class LyricsPreviewWorker(QThread):
     def run(self):
         try:
             result = resolve_lyrics_for_song(self.title, self.artist, self.filepath)
+            if result.get("status") == "error":
+                self.finished_err.emit({
+                    "stage": "pipeline",
+                    "code": "LYRICS_BLOCKED",
+                    "message": result.get("error") or "Не удалось проверить текст (сетевая блокировка)",
+                })
+                return
             self.finished_ok.emit(result)
         except Exception as exc:
             self.finished_err.emit({
@@ -38,8 +55,9 @@ class LyricsBulkWorker(QThread):
     finished_ok = pyqtSignal(dict)
     finished_err = pyqtSignal(dict)
 
-    def __init__(self):
+    def __init__(self, drive=None):
         super().__init__()
+        self.drive = drive
         self._stop_requested = False
 
     def request_stop(self):
@@ -60,7 +78,7 @@ class LyricsBulkWorker(QThread):
     def _process_all(self) -> dict:
         songs = db.get_songs_without_lyrics()
         total = len(songs)
-        found = instrumental = failed = 0
+        found = instrumental = failed = blocked_in_a_row = 0
         for idx, song in enumerate(songs, start=1):
             if self._stop_requested:
                 break
@@ -68,16 +86,33 @@ class LyricsBulkWorker(QThread):
             artist = strip_decor(song.artist)
             self.progress.emit(f"({idx}/{total}) {artist} — {title}…")
             try:
-                result = resolve_lyrics_for_song(song.title, song.artist, song.filepath or "")
+                result = resolve_lyrics_for_song(
+                    song.title, song.artist, song.filepath or "", use_shazam_fallback=False,
+                )
             except Exception:
                 failed += 1
                 continue
+            status = result.get("status")
+            if status == "error":
+                # Блокировка/сетевая ошибка — не доказывает отсутствие текста,
+                # оставляем песню как есть (плейсхолдер), попробуем в другой раз.
+                failed += 1
+                blocked_in_a_row += 1
+                if blocked_in_a_row >= 3:
+                    self.progress.emit("Genius временно блокирует запросы — остановлено, попробуй позже")
+                    break
+                time.sleep(_BULK_DELAY_SECONDS)
+                continue
+            blocked_in_a_row = 0
             lyrics = result.get("lyrics") or INSTRUMENTAL_MARK
             db.update_song_lyrics(song.id, lyrics)
-            if result.get("status") == "instrumental":
+            if self.drive is not None:
+                push_song_meta(self.drive, song, title, artist, lyrics)
+            if status == "instrumental":
                 instrumental += 1
             else:
                 found += 1
+            time.sleep(_BULK_DELAY_SECONDS)
         return {
             "total": total,
             "found": found,

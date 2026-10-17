@@ -252,7 +252,7 @@ body {
     flex-wrap: wrap;
     justify-content: flex-end;
     gap: 4px;
-    max-width: 150px;
+    max-width: 180px;
 }
 
 .song-item-actions button {
@@ -264,6 +264,46 @@ body {
     font-size: 10px;
     cursor: pointer;
     flex: 0 0 auto;
+}
+
+/* button.icon-btn (не просто .icon-btn): нужна та же специфичность, что у
+   .song-item-actions button / .pv-song-actions button, иначе те более
+   специфичные правила (border-radius:8px, padding:4px 8px) перебивали бы
+   круглую форму иконки. */
+button.icon-btn {
+    border: none;
+    background: #ede7f6;
+    color: #6c5b7b;
+    border-radius: 50%;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    cursor: pointer;
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s ease, color 0.15s ease;
+}
+
+.icon-btn svg {
+    width: 17px;
+    height: 17px;
+    display: block;
+}
+
+.icon-btn:hover {
+    background: #d1c4e9;
+    color: #4a3e56;
+}
+
+.icon-btn-danger:hover {
+    background: #f3c6d2;
+    color: #a13a55;
+}
+
+.song-row-clickable {
+    cursor: pointer;
 }
 
 .playlist-list {
@@ -465,13 +505,16 @@ body {
     box-shadow: 0 8px 20px rgba(179, 157, 219, 0.45);
 }
 
+/* Раньше тут была белая иконка на светло-лавандовом фоне кнопки — слишком
+   низкий контраст, play/pause визуально "сливались" с кнопкой. Тёмно-фиолетовый
+   (как у остальных иконок управления) виден чётко в обоих состояниях. */
 .btn-main .ico-play {
-    border-left-color: #fff;
+    border-left-color: #4a3e56;
 }
 
 .btn-main .ico-pause {
-    border-left-color: #fff;
-    border-right-color: #fff;
+    border-left-color: #4a3e56;
+    border-right-color: #4a3e56;
 }
 
 .btn-panel {
@@ -680,7 +723,7 @@ body {
 }
 
 .side-panel {
-    width: 360px;
+    width: 440px;
     border-left: 1px solid rgba(255, 255, 255, 0.5);
     background: rgba(255, 255, 255, 0.3);
     display: flex;
@@ -1094,7 +1137,7 @@ body {
     flex-wrap: wrap;
     justify-content: flex-end;
     gap: 4px;
-    max-width: 150px;
+    max-width: 180px;
 }
 
 .pv-song-actions button {

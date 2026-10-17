@@ -23,6 +23,7 @@ from .ocr_worker import OcrWorker
 from .text_search_worker import TextSearchDownloadWorker
 from .shazam_worker import ShazamWorker
 from .lyrics_worker import LyricsPreviewWorker, LyricsBulkWorker
+from .drive_meta_sync import push_song_meta
 from typing import Optional
 from .text_style import strip_decor, wrap_artist, wrap_title
 
@@ -31,7 +32,7 @@ MAX_PLAYLISTS_PER_SONG = 5
 
 
 class BlossomBridge(QObject):
-    songChanged = pyqtSignal(int, str, str, str, str, str, str, bool, bool)
+    songChanged = pyqtSignal(int, str, str, str, str, str, str, bool, bool, bool)
     nextSongPreview = pyqtSignal(str)
     playlistListUpdated = pyqtSignal(list)
     importStarted = pyqtSignal(str)
@@ -221,6 +222,7 @@ class BlossomBridge(QObject):
                 "Моя коллекция",
                 False,
                 False,
+                False,
             )
             return
 
@@ -237,6 +239,8 @@ class BlossomBridge(QObject):
         next_text = next_song.title if next_song else "Конец очереди"
         self.nextSongPreview.emit(f"Далее: {next_text}")
 
+        has_lyrics_content = bool(song.lyrics and song.lyrics.strip() and song.lyrics.strip() != DEFAULT_LYRICS)
+
         self.songChanged.emit(
             song.id,
             song.title,
@@ -247,25 +251,20 @@ class BlossomBridge(QObject):
             "Моя коллекция",
             has_prev,
             has_next,
+            has_lyrics_content,
         )
 
     @pyqtSlot(result=str)
     def getDriveStatus(self) -> str:
-        if self.drive.service and not self.drive.user_email:
-            try:
-                self.drive.user_email = self.drive._fetch_user_email()
-            except Exception:
-                pass
+        # Раньше тут был синхронный self.drive._fetch_user_email() (сетевой
+        # вызов) прямо на GUI-потоке — на нестабильной сети UI подвисал
+        # ("не отвечает") на каждое открытие настроек. login()/try_silent_login()
+        # уже выставляют user_email при входе — здесь просто отдаём, что есть.
         return json.dumps(self.drive.status_snapshot(), ensure_ascii=False)
 
     @pyqtSlot()
     def emitDriveStatus(self):
         """Emit driveStatusChanged signal so JS can react asynchronously."""
-        if self.drive.service and not self.drive.user_email:
-            try:
-                self.drive.user_email = self.drive._fetch_user_email()
-            except Exception:
-                pass
         self._emit_drive_status()
 
     @pyqtSlot()
@@ -402,28 +401,7 @@ class BlossomBridge(QObject):
             final_lyrics,
             cover_path,
         )
-        # Update meta on Drive
-        if self.drive.service and song.drive_meta_id:
-            try:
-                import re
-                stem = re.sub(r'[<>:"/\\|?*]+', "", f"{raw_artist}_{raw_title}")
-                stem = re.sub(r"\s+", "_", stem).strip("._")[:120] or "track"
-                meta = {
-                    "title": raw_title,
-                    "artist": raw_artist,
-                    "lyrics": final_lyrics,
-                    "audio_file_id": song.drive_file_id or "",
-                    "cover_file_id": song.drive_cover_id or "",
-                    "lyrics_file_id": song.drive_lyrics_id or "",
-                }
-                from .paths import TEMP_DIR
-                os.makedirs(TEMP_DIR, exist_ok=True)
-                local_meta = os.path.join(TEMP_DIR, f"{stem}.json")
-                with open(local_meta, "w", encoding="utf-8") as fh:
-                    json.dump(meta, fh, ensure_ascii=False, indent=2)
-                self.drive.update_file(song.drive_meta_id, local_meta)
-            except Exception:
-                pass
+        push_song_meta(self.drive, song, raw_title, raw_artist, final_lyrics)
         self._reload_queue_keep(song_id)
         self._update_ui_state()
         self._emit_library()
@@ -1100,7 +1078,7 @@ class BlossomBridge(QObject):
             self.lyricsBulkFailed.emit("Поиск уже выполняется")
             return
         self.lyricsBulkStarted.emit()
-        self._lyrics_bulk_worker = LyricsBulkWorker()
+        self._lyrics_bulk_worker = LyricsBulkWorker(drive=self.drive)
         self._lyrics_bulk_worker.progress.connect(self.lyricsBulkProgress.emit)
         self._lyrics_bulk_worker.finished_ok.connect(self._on_lyrics_bulk_ok)
         self._lyrics_bulk_worker.finished_err.connect(self._on_lyrics_bulk_err)

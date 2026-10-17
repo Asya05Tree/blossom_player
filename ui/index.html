@@ -95,7 +95,7 @@
                 <span class="vol-label">Громкость</span>
                 <input type="range" class="slider" id="volume-slider" min="0" max="100" value="20" oninput="setVolume(this.value)">
             </div>
-            <button class="btn btn-panel" onclick="toggleSidePanel()">Текст и фон</button>
+            <button id="btn-lyrics-panel" class="btn btn-panel" onclick="toggleSidePanel()" title="У этого трека пока нет текста" disabled>Текст и фон</button>
             <button class="btn btn-panel" onclick="openSettingsModal()">Настройки</button>
         </div>
     </div>
@@ -358,11 +358,11 @@
                 <button type="button" id="modal-lyrics-tab-manual" class="library-tab-btn active" onclick="switchModalLyricsTab('manual')">Текст вручную</button>
                 <button type="button" id="modal-lyrics-tab-auto" class="library-tab-btn" onclick="switchModalLyricsTab('auto')">Найти в интернете</button>
             </div>
-            <textarea id="modal-lyrics" class="cozy-input" placeholder="Текст песни..." style="height: 100px; resize: none;"></textarea>
+            <textarea id="modal-lyrics" class="cozy-input" placeholder="Текст песни..." style="height: 220px; resize: vertical;"></textarea>
             <div id="modal-lyrics-auto-pane" class="hidden">
                 <button type="button" class="btn-modal btn-secondary" onclick="searchLocalAddLyrics()">Найти текст</button>
                 <p id="modal-lyrics-auto-status" class="import-status"></p>
-                <textarea id="modal-lyrics-auto-result" class="cozy-input" readonly placeholder="Текст появится здесь после поиска" style="height: 100px; resize: none;"></textarea>
+                <textarea id="modal-lyrics-auto-result" class="cozy-input" readonly placeholder="Текст появится здесь после поиска" style="height: 220px; resize: vertical;"></textarea>
             </div>
 
             <div class="modal-actions">
@@ -405,35 +405,46 @@
         <div class="modal-card modal-card-wide">
             <h3 class="modal-title">Настройки</h3>
 
-            <div class="drive-box">
-                <h4 style="font-size:14px;color:#7e57c2;margin:0">Google Drive</h4>
-                <p id="drive-status-text" class="drive-status">Google Drive: не подключён</p>
-                <div class="drive-actions">
-                    <button type="button" class="btn-modal btn-secondary" onclick="loginDrive(false)">Войти в Google Drive</button>
-                    <button type="button" class="btn-modal btn-secondary" onclick="loginDrive(true)">Сменить почту</button>
-                    <button type="button" class="btn-modal btn-ghost" onclick="logoutDrive()">Выйти</button>
-                </div>
-                <p class="hint-text">Google Cloud → OAuth consent screen → Publish app (Production). Пока Testing — только почты из Test users.</p>
-                <button type="button" class="btn-modal btn-primary" onclick="syncFromDrive()" style="margin-top:6px">Синхронизировать с Drive</button>
+            <div class="library-tabs">
+                <button type="button" id="settings-tab-btn-general" class="library-tab-btn active" onclick="switchSettingsTab('general')">Общие</button>
+                <button type="button" id="settings-tab-btn-lyrics" class="library-tab-btn" onclick="switchSettingsTab('lyrics')">Текст песен</button>
             </div>
 
-            <div style="margin-top:8px">
-                <h4 style="font-size:14px;color:#7e57c2;margin:0 0 8px 0">Фоновое видео</h4>
-                <p style="font-size:12px;color:#9a86a4;margin-bottom:6px">Выбери webm или mp4 (до 1 мин), будет зациклено на фоне</p>
-                <div class="file-row">
-                    <input type="text" id="settings-video-path" class="cozy-input" readonly placeholder="Видео не выбрано">
-                    <button type="button" class="btn-modal btn-secondary" onclick="pickFile('video_bg')">Выбрать</button>
+            <div id="settings-tab-general" class="library-tab-pane">
+                <div class="drive-box">
+                    <h4 style="font-size:14px;color:#7e57c2;margin:0">Google Drive</h4>
+                    <p id="drive-status-text" class="drive-status">Google Drive: не подключён</p>
+                    <div class="drive-actions">
+                        <button type="button" class="btn-modal btn-secondary" onclick="loginDrive(false)">Войти в Google Drive</button>
+                        <button type="button" class="btn-modal btn-secondary" onclick="loginDrive(true)">Сменить почту</button>
+                        <button type="button" class="btn-modal btn-ghost" onclick="logoutDrive()">Выйти</button>
+                    </div>
+                    <p class="hint-text">Google Cloud → OAuth consent screen → Publish app (Production). Пока Testing — только почты из Test users.</p>
+                    <button type="button" class="btn-modal btn-primary" onclick="syncFromDrive()" style="margin-top:6px">Синхронизировать с Drive</button>
+                </div>
+
+                <div style="margin-top:8px">
+                    <h4 style="font-size:14px;color:#7e57c2;margin:0 0 8px 0">Фоновое видео</h4>
+                    <p style="font-size:12px;color:#9a86a4;margin-bottom:6px">Выбери webm или mp4 (до 1 мин), будет зациклено на фоне</p>
+                    <div class="file-row">
+                        <input type="text" id="settings-video-path" class="cozy-input" readonly placeholder="Видео не выбрано">
+                        <button type="button" class="btn-modal btn-secondary" onclick="pickFile('video_bg')">Выбрать</button>
+                    </div>
                 </div>
             </div>
 
-            <div style="margin-top:8px">
-                <h4 style="font-size:14px;color:#7e57c2;margin:0 0 8px 0">Текст песен</h4>
+            <div id="settings-tab-lyrics" class="library-tab-pane hidden">
+                <h4 style="font-size:14px;color:#7e57c2;margin:0 0 8px 0">Текст песен без текста</h4>
                 <p style="font-size:12px;color:#9a86a4;margin-bottom:6px">
                     Ищет текст в интернете для треков без текста (по названию и исполнителю).
                     Если не находит — пытается распознать трек через Shazam и повторяет поиск.
                     Если текста всё равно нет (похоже на инструментал) — ставит значок ♬.
+                    Найденный текст сохраняется и на Google Drive — повторно искать не придётся.
                 </p>
-                <div id="lyrics-bulk-log" class="spotify-auto-log" style="max-height:120px"></div>
+                <p style="font-size:11px;color:#b3a1bd;margin-bottom:6px">
+                    Поиск идёт в фоне — можно скрыть настройки и продолжить пользоваться плеером.
+                </p>
+                <div id="lyrics-bulk-log" class="spotify-auto-log" style="max-height:160px"></div>
                 <p id="lyrics-bulk-status" class="import-status"></p>
                 <div class="file-row">
                     <button type="button" id="btn-lyrics-bulk-start" class="btn-modal btn-primary" onclick="startLyricsBulkSearch()">Найти текст песен без текста</button>
@@ -442,8 +453,8 @@
             </div>
 
             <div class="modal-actions">
-                <button type="button" class="btn-modal btn-primary" onclick="applySettings()">Применить</button>
-                <button type="button" class="btn-modal btn-ghost" onclick="document.getElementById('settings-modal').style.display='none'">Закрыть</button>
+                <button type="button" id="btn-settings-apply" class="btn-modal btn-primary" onclick="applySettings()">Применить</button>
+                <button type="button" id="btn-settings-close" class="btn-modal btn-ghost" onclick="closeSettingsModal()">Закрыть</button>
             </div>
         </div>
     </div>
@@ -459,7 +470,7 @@
                 <input type="text" id="edit-cover-path" class="cozy-input" readonly placeholder="Новая обложка">
                 <button type="button" class="btn-modal btn-secondary" onclick="pickFile('cover_edit')">Сменить</button>
             </div>
-            <textarea id="edit-lyrics" class="cozy-input" style="height: 100px; resize: none;"></textarea>
+            <textarea id="edit-lyrics" class="cozy-input" style="height: 260px; resize: vertical;"></textarea>
             <button type="button" class="btn-modal btn-ghost" onclick="deleteEditLyrics()" style="align-self:flex-start">Удалить текст</button>
             <div class="modal-actions">
                 <button type="button" class="btn-modal btn-primary" onclick="saveEditSong()">Сохранить</button>

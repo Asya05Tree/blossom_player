@@ -24,7 +24,36 @@ _INSTRUMENTAL_KEYWORDS = (
 
 GENIUS_SEARCH_URL = "https://api.genius.com/search"
 _REQUEST_TIMEOUT = 10
-_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) BlossomPlayer/1.0"
+
+# Без правдоподобных браузерных заголовков Cloudflare перед genius.com отдаёт
+# 403 почти сразу (особенно при частых запросах во время массового поиска) —
+# тогда "текста не нашли" выглядело бы так же, как "текста и не существует",
+# и песня ошибочно помечалась инструментальной. Поэтому держим одну сессию
+# с набором заголовков настоящего браузера на весь процесс поиска текстов.
+_session = requests.Session()
+_session.headers.update({
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9,ru;q=0.8",
+})
+
+_BLOCK_MARKERS = ("just a moment", "attention required", "cf-browser-verification", "cloudflare")
+
+
+class LyricsLookupError(Exception):
+    """Сеть/антибот-блокировка — означает "не смогли проверить", а не
+    "текста точно не существует". Вызывающий код не должен на основании этой
+    ошибки помечать песню инструментальной."""
+
+
+def _looks_blocked(resp: requests.Response) -> bool:
+    if resp.status_code in (403, 429, 503):
+        return True
+    low = resp.text[:2000].lower()
+    return any(marker in low for marker in _BLOCK_MARKERS)
 
 
 def looks_instrumental(*texts: str) -> bool:
@@ -51,12 +80,14 @@ def _normalize(text: str) -> str:
 
 
 def _genius_search_hits(query: str, token: str) -> list:
-    resp = requests.get(
+    resp = _session.get(
         GENIUS_SEARCH_URL,
         params={"q": query},
-        headers={"Authorization": f"Bearer {token}", "User-Agent": _USER_AGENT},
+        headers={"Authorization": f"Bearer {token}"},
         timeout=_REQUEST_TIMEOUT,
     )
+    if _looks_blocked(resp):
+        raise LyricsLookupError(f"Genius API заблокировал запрос (код {resp.status_code})")
     resp.raise_for_status()
     data = resp.json()
     return (data.get("response") or {}).get("hits") or []
@@ -98,14 +129,25 @@ def _pick_best_hit(hits: list, title: str, artist: str) -> dict:
 
 
 def _scrape_lyrics_page(url: str) -> str:
-    resp = requests.get(url, headers={"User-Agent": _USER_AGENT}, timeout=_REQUEST_TIMEOUT)
+    resp = _session.get(url, timeout=_REQUEST_TIMEOUT)
+    if _looks_blocked(resp):
+        raise LyricsLookupError(f"Genius заблокировал открытие страницы текста (код {resp.status_code})")
     resp.raise_for_status()
-    soup = BeautifulSoup(resp.text, "html.parser")
+    # resp.content (байты), а не resp.text — requests угадывает кодировку по
+    # заголовкам и часто промахивается на кириллице, что давало "кракозябры"
+    # вместо текста; BeautifulSoup сам правильно определит кодировку по meta.
+    soup = BeautifulSoup(resp.content, "html.parser")
     containers = soup.find_all(attrs={"data-lyrics-container": "true"})
     if not containers:
         return ""
     chunks = []
     for container in containers:
+        # Genius вкладывает внутрь самого контейнера текста заголовок вида
+        # "N ContributorsНазвание Lyrics" (кнопка со счётчиком соавторов) —
+        # он помечен data-exclude-from-selection="true" (сам Genius исключает
+        # его из выделения/копирования текста), и мы делаем то же самое.
+        for excluded in container.select('[data-exclude-from-selection="true"]'):
+            excluded.decompose()
         for br in container.find_all("br"):
             br.replace_with("\n")
         chunks.append(container.get_text())
@@ -114,7 +156,8 @@ def _scrape_lyrics_page(url: str) -> str:
 
 
 def search_lyrics_genius(title: str, artist: str) -> str:
-    """Возвращает текст песни с Genius или '' если не найдено / нет уверенного совпадения."""
+    """Возвращает текст песни с Genius или '' если не найдено / нет уверенного совпадения.
+    Поднимает LyricsLookupError при сетевой блокировке (не значит "текста нет")."""
     clean_title = strip_decor(title or "").strip()
     clean_artist = strip_decor(artist or "").strip()
     if not clean_title:
@@ -124,22 +167,16 @@ def search_lyrics_genius(title: str, artist: str) -> str:
         return ""
     unknown_artist = clean_artist.lower() in ("", "unknown artist", "unknown")
     query = clean_title if unknown_artist else f"{clean_artist} {clean_title}"
-    try:
-        hits = _genius_search_hits(query, token)
-    except Exception:
-        return ""
+    hits = _genius_search_hits(query, token)
     if not hits:
         return ""
     best = _pick_best_hit(hits, clean_title, clean_artist)
     if not best or not best.get("url"):
         return ""
-    try:
-        return _scrape_lyrics_page(best["url"])
-    except Exception:
-        return ""
+    return _scrape_lyrics_page(best["url"])
 
 
-def resolve_lyrics_for_song(title: str, artist: str, filepath: str = "") -> dict:
+def resolve_lyrics_for_song(title: str, artist: str, filepath: str = "", use_shazam_fallback: bool = True) -> dict:
     """Определяет статус песни и находит текст.
 
     Порядок: 1) понять, не инструментал ли это уже по названию;
@@ -147,8 +184,12 @@ def resolve_lyrics_for_song(title: str, artist: str, filepath: str = "") -> dict
     уточнить трек через Shazam и повторить поиск по уточнённым данным;
     4) если текста так и не нашли — считаем песню инструментальной.
 
-    Возвращает {"status": "found"|"instrumental", "lyrics": str,
-    "identified_title"?: str, "identified_artist"?: str}.
+    Если поиск упёрся в сетевую блокировку (Genius отбил запрос) — возвращает
+    status "error", а НЕ "instrumental": блокировка не доказывает отсутствие
+    текста, и песню нельзя клеймить инструментальной на основании сбоя сети.
+
+    Возвращает {"status": "found"|"instrumental"|"error", "lyrics": str|None,
+    "identified_title"?: str, "identified_artist"?: str, "error"?: str}.
     """
     clean_title = strip_decor(title or "")
     clean_artist = strip_decor(artist or "")
@@ -156,11 +197,14 @@ def resolve_lyrics_for_song(title: str, artist: str, filepath: str = "") -> dict
     if looks_instrumental(clean_title, clean_artist):
         return {"status": "instrumental", "lyrics": INSTRUMENTAL_MARK}
 
-    lyrics = search_lyrics_genius(clean_title, clean_artist)
+    try:
+        lyrics = search_lyrics_genius(clean_title, clean_artist)
+    except LyricsLookupError as exc:
+        return {"status": "error", "lyrics": None, "error": str(exc)}
     if lyrics:
         return {"status": "found", "lyrics": lyrics}
 
-    if filepath and os.path.isfile(filepath):
+    if use_shazam_fallback and filepath and os.path.isfile(filepath):
         try:
             from .shazam_util import identify_from_file
             identified = identify_from_file(filepath)
@@ -171,7 +215,10 @@ def resolve_lyrics_for_song(title: str, artist: str, filepath: str = "") -> dict
         if ident_title:
             if looks_instrumental(ident_title, ident_artist):
                 return {"status": "instrumental", "lyrics": INSTRUMENTAL_MARK}
-            lyrics = search_lyrics_genius(ident_title, ident_artist)
+            try:
+                lyrics = search_lyrics_genius(ident_title, ident_artist)
+            except LyricsLookupError as exc:
+                return {"status": "error", "lyrics": None, "error": str(exc)}
             if lyrics:
                 return {
                     "status": "found",

@@ -1,3 +1,15 @@
+/* Набор line-иконок (стиль Feather, SVG stroke=currentColor — наследует цвет
+   кнопки) для замены текстовых подписей на кнопках ("Инстр.", "Удал." и т.д.).
+   Подсказка по наведению — через title у самой кнопки. */
+const ICONS = {
+    edit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>',
+    trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>',
+    removeFromList: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><line x1="8" y1="12" x2="16" y2="12"/></svg>',
+    music: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>',
+    scissors: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><line x1="20" y1="4" x2="8.12" y2="15.88"/><line x1="14.47" y1="14.48" x2="20" y2="20"/><line x1="8.12" y1="8.12" x2="12" y2="12"/></svg>',
+    playlistAdd: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h12"/><path d="M3 12h9"/><path d="M3 18h6"/><path d="M15 17h6"/><path d="M18 14v6"/></svg>',
+};
+
 let pyBridge = null;
 let isPlaying = false;
 let currentLoopMode = "sequence";
@@ -64,7 +76,7 @@ function onDriveReady(data) {
 }
 
 function wireBridgeSignals() {
-    pyBridge.songChanged.connect(function(songId, title, artist, cover, lyrics, video, playlists, has_prev, has_next) {
+    pyBridge.songChanged.connect(function(songId, title, artist, cover, lyrics, video, playlists, has_prev, has_next, has_lyrics) {
         document.getElementById("title").innerText = title;
         document.getElementById("artist").innerText = artist;
         document.getElementById("lyrics").innerText = lyrics;
@@ -75,6 +87,7 @@ function wireBridgeSignals() {
         if (bn) bn.disabled = !has_next;
         const hasSong = !!songId;
         setPlaybackControlsEnabled(hasSong);
+        setLyricsPanelAvailable(!!has_lyrics);
         if (!hasSong) {
             isPlaying = false;
             setPlayIcon(false);
@@ -652,7 +665,7 @@ function renderLibrary(json) {
     }
     sortedSongs.forEach(function(s) {
         const row = document.createElement("div");
-        row.className = "song-item";
+        row.className = "song-item song-row-clickable";
         const cover = s.cover || "../assets/default_cover.png";
         row.innerHTML =
             "<img src='" + cover + "' alt=''>" +
@@ -663,42 +676,42 @@ function renderLibrary(json) {
                 "<div class='song-item-playlists'>&#9834; " + escapeHtml(s.playlists.join(", ")) + "</div>" : "") +
             "</div>" +
             "<div class='song-item-actions'>" +
-            "<button type='button' data-play='" + s.id + "'>Play</button>" +
-            "<button type='button' data-playlist='" + s.id + "'>Плейлист</button>" +
-            "<button type='button' data-edit='" + s.id + "'>Изм.</button>" +
-            "<button type='button' data-instr='" + s.id + "' title='Найти инструментал на YouTube'>Инстр.</button>" +
-            "<button type='button' data-trim='" + s.id + "' title='Обрезать начало/конец'>Обрез.</button>" +
-            "<button type='button' data-del='" + s.id + "'>Удал.</button>" +
+            "<button type='button' class='icon-btn' data-playlist='" + s.id + "' title='Добавить в плейлист'>" + ICONS.playlistAdd + "</button>" +
+            "<button type='button' class='icon-btn' data-edit='" + s.id + "' title='Изменить название, автора, обложку, текст'>" + ICONS.edit + "</button>" +
+            "<button type='button' class='icon-btn' data-instr='" + s.id + "' title='Найти инструментал на YouTube'>" + ICONS.music + "</button>" +
+            "<button type='button' class='icon-btn' data-trim='" + s.id + "' title='Обрезать начало/конец'>" + ICONS.scissors + "</button>" +
+            "<button type='button' class='icon-btn icon-btn-danger' data-del='" + s.id + "' title='Удалить трек'>" + ICONS.trash + "</button>" +
             "</div>";
-        list.appendChild(row);
-    });
-    list.querySelectorAll("[data-play]").forEach(function(btn) {
-        btn.onclick = function() {
-            selectedSongId = parseInt(btn.getAttribute("data-play"));
-            pyBridge.playSongById(selectedSongId);
+        row.title = "Нажми, чтобы включить";
+        row.onclick = function() {
+            selectedSongId = s.id;
+            pyBridge.playSongById(s.id);
             isPlaying = true;
             setPlayIcon(true);
         };
+        list.appendChild(row);
     });
     list.querySelectorAll("[data-playlist]").forEach(function(btn) {
-        btn.onclick = function() { openPlaylistModal(parseInt(btn.getAttribute("data-playlist"))); };
+        btn.onclick = function(e) { e.stopPropagation(); openPlaylistModal(parseInt(btn.getAttribute("data-playlist"))); };
     });
     list.querySelectorAll("[data-edit]").forEach(function(btn) {
-        btn.onclick = function() { openEditModal(parseInt(btn.getAttribute("data-edit"))); };
+        btn.onclick = function(e) { e.stopPropagation(); openEditModal(parseInt(btn.getAttribute("data-edit"))); };
     });
     list.querySelectorAll("[data-del]").forEach(function(btn) {
-        btn.onclick = function() {
+        btn.onclick = function(e) {
+            e.stopPropagation();
             if (confirm("Удалить этот трек?")) pyBridge.deleteSongById(parseInt(btn.getAttribute("data-del")));
         };
     });
     list.querySelectorAll("[data-instr]").forEach(function(btn) {
-        btn.onclick = function() {
+        btn.onclick = function(e) {
+            e.stopPropagation();
             btn.disabled = true;
             pyBridge.findInstrumental(parseInt(btn.getAttribute("data-instr")));
         };
     });
     list.querySelectorAll("[data-trim]").forEach(function(btn) {
-        btn.onclick = function() { openTrimModal(parseInt(btn.getAttribute("data-trim"))); };
+        btn.onclick = function(e) { e.stopPropagation(); openTrimModal(parseInt(btn.getAttribute("data-trim"))); };
     });
 }
 
@@ -895,6 +908,20 @@ function setPlaybackControlsEnabled(enabled) {
         var el = document.getElementById(id);
         if (el) el.disabled = !enabled;
     });
+}
+
+function setLyricsPanelAvailable(hasLyrics) {
+    var btn = document.getElementById("btn-lyrics-panel");
+    if (btn) {
+        btn.disabled = !hasLyrics;
+        btn.title = hasLyrics ? "Показать текст и фон" : "У этого трека пока нет текста";
+    }
+    if (!hasLyrics) {
+        // Если панель была открыта у предыдущего трека — у нового трека текста
+        // нет, оставлять открытую панель с чужим текстом/плейсхолдером не нужно.
+        var panel = document.getElementById("side-panel");
+        if (panel && !panel.classList.contains("hidden")) panel.classList.add("hidden");
+    }
 }
 
 function setPlayIcon(playing) {
@@ -1722,7 +1749,7 @@ function _renderPlaylistViewSongs(json, playlistId) {
     }
     data.forEach(function(s) {
         var row = document.createElement("div");
-        row.className = "pv-song-row";
+        row.className = "pv-song-row song-row-clickable";
         var cover = s.cover || "../assets/default_cover.png";
         row.innerHTML =
             "<img src='" + cover + "' alt=''>" +
@@ -1733,29 +1760,28 @@ function _renderPlaylistViewSongs(json, playlistId) {
                 "<div class='song-item-playlists'>&#9834; также: " + escapeHtml(s.other_playlists.join(", ")) + "</div>" : "") +
             "</div>" +
             "<div class='pv-song-actions'>" +
-            "<button type='button' data-pvplay='" + s.id + "'>Play</button>" +
-            "<button type='button' data-pvedit='" + s.id + "'>Изм.</button>" +
-            "<button type='button' data-pvplaylist='" + s.id + "'>Плейлист</button>" +
-            "<button type='button' data-pvremove='" + s.id + "'>Убрать</button>" +
+            "<button type='button' class='icon-btn' data-pvedit='" + s.id + "' title='Изменить название, автора, обложку, текст'>" + ICONS.edit + "</button>" +
+            "<button type='button' class='icon-btn' data-pvplaylist='" + s.id + "' title='Добавить в другой плейлист'>" + ICONS.playlistAdd + "</button>" +
+            "<button type='button' class='icon-btn icon-btn-danger' data-pvremove='" + s.id + "' title='Убрать из этого плейлиста'>" + ICONS.removeFromList + "</button>" +
             "</div>";
-        listEl.appendChild(row);
-    });
-    listEl.querySelectorAll("[data-pvplay]").forEach(function(btn) {
-        btn.onclick = function() {
-            selectedSongId = parseInt(btn.getAttribute("data-pvplay"));
-            pyBridge.playSongById(selectedSongId);
+        row.title = "Нажми, чтобы включить";
+        row.onclick = function() {
+            selectedSongId = s.id;
+            pyBridge.playSongById(s.id);
             isPlaying = true;
             setPlayIcon(true);
         };
+        listEl.appendChild(row);
     });
     listEl.querySelectorAll("[data-pvedit]").forEach(function(btn) {
-        btn.onclick = function() { openEditModal(parseInt(btn.getAttribute("data-pvedit"))); };
+        btn.onclick = function(e) { e.stopPropagation(); openEditModal(parseInt(btn.getAttribute("data-pvedit"))); };
     });
     listEl.querySelectorAll("[data-pvplaylist]").forEach(function(btn) {
-        btn.onclick = function() { openPlaylistModal(parseInt(btn.getAttribute("data-pvplaylist"))); };
+        btn.onclick = function(e) { e.stopPropagation(); openPlaylistModal(parseInt(btn.getAttribute("data-pvplaylist"))); };
     });
     listEl.querySelectorAll("[data-pvremove]").forEach(function(btn) {
-        btn.onclick = function() {
+        btn.onclick = function(e) {
+            e.stopPropagation();
             var songId = parseInt(btn.getAttribute("data-pvremove"));
             pyBridge.removeSongFromPlaylist(playlistId, songId);
             var row = btn.closest(".pv-song-row");
@@ -1791,8 +1817,26 @@ function submitRenamePl() {
 /* === Settings Modal === */
 
 function openSettingsModal() {
+    switchSettingsTab("general");
     document.getElementById("settings-modal").style.display = "flex";
     refreshDriveStatus();
+}
+
+function closeSettingsModal() {
+    // Всегда именно скрывает, а не отменяет: массовый поиск текста (если он
+    // идёт) продолжает работать в фоне независимо от видимости окна.
+    document.getElementById("settings-modal").style.display = "none";
+}
+
+function switchSettingsTab(tab) {
+    var panes = { general: "settings-tab-general", lyrics: "settings-tab-lyrics" };
+    var btns = { general: "settings-tab-btn-general", lyrics: "settings-tab-btn-lyrics" };
+    Object.keys(panes).forEach(function(key) {
+        var pane = document.getElementById(panes[key]);
+        var btn = document.getElementById(btns[key]);
+        if (pane) pane.classList.toggle("hidden", key !== tab);
+        if (btn) btn.classList.toggle("active", key === tab);
+    });
 }
 
 function syncFromDrive() {
@@ -1819,8 +1863,15 @@ function setLyricsBulkLock(locked) {
     lyricsBulkRunning = locked;
     var startBtn = document.getElementById("btn-lyrics-bulk-start");
     var stopBtn = document.getElementById("btn-lyrics-bulk-stop");
+    var applyBtn = document.getElementById("btn-settings-apply");
+    var closeBtn = document.getElementById("btn-settings-close");
     if (startBtn) startBtn.disabled = locked;
     if (stopBtn) stopBtn.disabled = !locked;
+    // Пока идёт поиск: "Применить" недоступен (чтобы не путать с настройками,
+    // которые не относятся к поиску), а "Закрыть" становится "Скрыть" —
+    // напоминание, что окно просто прячется, а не останавливает поиск.
+    if (applyBtn) applyBtn.disabled = locked;
+    if (closeBtn) closeBtn.innerText = locked ? "Скрыть" : "Закрыть";
 }
 
 function appendLyricsBulkLog(msg) {
