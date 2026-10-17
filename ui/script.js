@@ -73,6 +73,12 @@ function wireBridgeSignals() {
         const bn = document.getElementById("btn-next");
         if (bp) bp.disabled = !has_prev;
         if (bn) bn.disabled = !has_next;
+        const hasSong = !!songId;
+        setPlaybackControlsEnabled(hasSong);
+        if (!hasSong) {
+            isPlaying = false;
+            setPlayIcon(false);
+        }
         if (video && video.trim() !== "") {
             setVideoSource(video.trim());
         } else {
@@ -456,6 +462,61 @@ function wireBridgeSignals() {
             updateProgressBar(pos, dur);
         });
     }
+
+    if (pyBridge.lyricsPreviewReady) {
+        pyBridge.lyricsPreviewReady.connect(function(json) {
+            var data = {};
+            try { data = typeof json === "string" ? JSON.parse(json) : json; } catch (e) {}
+            modalLyricsAutoResult = data.lyrics || "";
+            var resultEl = document.getElementById("modal-lyrics-auto-result");
+            if (resultEl) resultEl.value = modalLyricsAutoResult;
+            if (data.status === "instrumental") {
+                setModalLyricsAutoStatus("Похоже, это инструментал — слов нет", false, true);
+            } else {
+                var extra = data.identified_title ?
+                    (" (распознано как " + data.identified_artist + " — " + data.identified_title + ")") : "";
+                setModalLyricsAutoStatus("Текст найден" + extra, false, true);
+            }
+        });
+    }
+
+    if (pyBridge.lyricsPreviewFailed) {
+        pyBridge.lyricsPreviewFailed.connect(function(msg) {
+            setModalLyricsAutoStatus(msg, true);
+        });
+    }
+
+    if (pyBridge.lyricsBulkStarted) {
+        pyBridge.lyricsBulkStarted.connect(function() {
+            document.getElementById("lyrics-bulk-log").innerText = "";
+            appendLyricsBulkLog("Начинаю поиск текстов…");
+            setLyricsBulkLock(true);
+        });
+    }
+
+    if (pyBridge.lyricsBulkProgress) {
+        pyBridge.lyricsBulkProgress.connect(function(msg) {
+            appendLyricsBulkLog(msg);
+            setLyricsBulkStatus(msg, false);
+        });
+    }
+
+    if (pyBridge.lyricsBulkFinished) {
+        pyBridge.lyricsBulkFinished.connect(function(msg) {
+            appendLyricsBulkLog(msg);
+            setLyricsBulkStatus(msg, false, true);
+            setLyricsBulkLock(false);
+            if (pyBridge.getLibraryJson) pyBridge.getLibraryJson();
+        });
+    }
+
+    if (pyBridge.lyricsBulkFailed) {
+        pyBridge.lyricsBulkFailed.connect(function(msg) {
+            appendLyricsBulkLog(msg);
+            setLyricsBulkStatus(msg, true);
+            setLyricsBulkLock(false);
+        });
+    }
 }
 
 function resolveCoverSrc(cover) {
@@ -503,11 +564,25 @@ function onFilePicked(path, kind) {
     if (kind === "audio") {
         document.getElementById("modal-path").value = path;
         const base = path.split(/[/\\]/).pop().replace(/\.[^.]+$/, "");
+        const parts = base.split(/\s*-\s*/);
         const t = document.getElementById("modal-title");
-        if (t && !t.value.trim()) t.value = base;
+        const a = document.getElementById("modal-artist");
+        if (parts.length >= 2) {
+            if (a && !a.value.trim()) a.value = parts[0].trim();
+            if (t && !t.value.trim()) t.value = parts.slice(1).join(" - ").trim();
+        } else if (t && !t.value.trim()) {
+            t.value = base;
+        }
     } else if (kind === "cover" || kind === "cover_local" || kind === "cover_youtube") {
         const id = kind === "cover" ? "spotify-cover" : kind === "cover_youtube" ? "youtube-cover" : "modal-cover";
         document.getElementById(id).value = path;
+        if (kind === "cover_local") {
+            const preview = document.getElementById("modal-cover-preview");
+            if (preview) {
+                preview.src = "file:///" + path.replace(/\\/g, "/");
+                preview.classList.remove("hidden");
+            }
+        }
     } else if (kind === "cover_edit") {
         document.getElementById("edit-cover-path").value = path;
         document.getElementById("edit-cover-preview").src = "file:///" + path.replace(/\\/g, "/");
@@ -747,6 +822,11 @@ function closeEditModal() {
     document.getElementById("edit-song-modal").style.display = "none";
 }
 
+function deleteEditLyrics() {
+    document.getElementById("edit-lyrics").value = "";
+    saveEditSong();
+}
+
 function refreshDriveStatus() {
     if (!pyBridge || !pyBridge.emitDriveStatus) return;
     pyBridge.emitDriveStatus();
@@ -808,6 +888,13 @@ function setImportStatus(text, isError, isOk) {
     if (!el) return;
     el.innerText = text || "";
     el.className = "import-status" + (isError ? " error" : isOk ? " ok" : "");
+}
+
+function setPlaybackControlsEnabled(enabled) {
+    ["btn-play", "btn-stop", "btn-shuffle", "btn-loop"].forEach(function(id) {
+        var el = document.getElementById(id);
+        if (el) el.disabled = !enabled;
+    });
 }
 
 function setPlayIcon(playing) {
@@ -877,6 +964,9 @@ function toggleAddMenu() {
     document.getElementById("add-menu").classList.toggle("hidden");
 }
 
+var modalLyricsTab = "manual";
+var modalLyricsAutoResult = "";
+
 function openLocalAdd() {
     document.getElementById("add-menu").classList.add("hidden");
     document.getElementById("modal-path").value = "";
@@ -884,7 +974,43 @@ function openLocalAdd() {
     document.getElementById("modal-artist").value = "";
     document.getElementById("modal-lyrics").value = "";
     document.getElementById("modal-cover").value = "";
+    var preview = document.getElementById("modal-cover-preview");
+    if (preview) { preview.src = ""; preview.classList.add("hidden"); }
+    document.getElementById("modal-lyrics-auto-result").value = "";
+    modalLyricsAutoResult = "";
+    setModalLyricsAutoStatus("");
+    switchModalLyricsTab("manual");
     toggleAddModal();
+}
+
+function switchModalLyricsTab(tab) {
+    modalLyricsTab = tab;
+    document.getElementById("modal-lyrics-tab-manual").classList.toggle("active", tab === "manual");
+    document.getElementById("modal-lyrics-tab-auto").classList.toggle("active", tab === "auto");
+    document.getElementById("modal-lyrics").classList.toggle("hidden", tab !== "manual");
+    document.getElementById("modal-lyrics-auto-pane").classList.toggle("hidden", tab !== "auto");
+}
+
+function setModalLyricsAutoStatus(text, isError, isOk) {
+    var el = document.getElementById("modal-lyrics-auto-status");
+    if (!el) return;
+    el.innerText = text || "";
+    el.className = "import-status" + (isError ? " error" : isOk ? " ok" : "");
+}
+
+function searchLocalAddLyrics() {
+    if (!pyBridge || !pyBridge.searchLyricsPreview) return;
+    var title = document.getElementById("modal-title").value.trim();
+    if (!title) {
+        setModalLyricsAutoStatus("Сначала укажи название песни", true);
+        return;
+    }
+    var artist = document.getElementById("modal-artist").value.trim() || "Unknown Artist";
+    var filepath = document.getElementById("modal-path").value.trim();
+    document.getElementById("modal-lyrics-auto-result").value = "";
+    modalLyricsAutoResult = "";
+    setModalLyricsAutoStatus("Ищу текст…", false);
+    pyBridge.searchLyricsPreview(title, artist, filepath);
 }
 
 function openCloudModal() {
@@ -1675,6 +1801,45 @@ function syncFromDrive() {
     }
 }
 
+/* === Массовый поиск текстов песен === */
+
+var lyricsBulkRunning = false;
+
+function startLyricsBulkSearch() {
+    if (!pyBridge || !pyBridge.findMissingLyrics) return;
+    if (lyricsBulkRunning) return;
+    pyBridge.findMissingLyrics();
+}
+
+function stopLyricsBulkSearch() {
+    if (pyBridge && pyBridge.stopFindMissingLyrics) pyBridge.stopFindMissingLyrics();
+}
+
+function setLyricsBulkLock(locked) {
+    lyricsBulkRunning = locked;
+    var startBtn = document.getElementById("btn-lyrics-bulk-start");
+    var stopBtn = document.getElementById("btn-lyrics-bulk-stop");
+    if (startBtn) startBtn.disabled = locked;
+    if (stopBtn) stopBtn.disabled = !locked;
+}
+
+function appendLyricsBulkLog(msg) {
+    var log = document.getElementById("lyrics-bulk-log");
+    if (!log || !msg) return;
+    var line = document.createElement("div");
+    line.innerText = msg;
+    log.appendChild(line);
+    while (log.childNodes.length > 300) log.removeChild(log.firstChild);
+    log.scrollTop = log.scrollHeight;
+}
+
+function setLyricsBulkStatus(text, isError, isOk) {
+    var el = document.getElementById("lyrics-bulk-status");
+    if (!el) return;
+    el.innerText = text || "";
+    el.className = "import-status" + (isError ? " error" : isOk ? " ok" : "");
+}
+
 function applySettings() {
     var path = document.getElementById("settings-video-path").value.trim();
     if (path) {
@@ -1743,11 +1908,13 @@ function submitNewSong() {
         showToast("Нажми «Выбрать файл»", true);
         return;
     }
+    const lyrics = modalLyricsTab === "auto" ?
+        modalLyricsAutoResult : document.getElementById("modal-lyrics").value;
     pyBridge.addSongFull(
         document.getElementById("modal-title").value,
         document.getElementById("modal-artist").value,
         path,
-        document.getElementById("modal-lyrics").value,
+        lyrics,
         document.getElementById("modal-cover").value.trim()
     );
     toggleAddModal();

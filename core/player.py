@@ -21,14 +21,14 @@ class BlossomPlayer:
 
     def load_queue(self, songs: List[Song], start_index: int = 0):
         self.original_queue = list(songs)
+        valid_start = 0 <= start_index < len(songs)
         if self.is_shuffle:
             self.queue = list(songs)
             random.shuffle(self.queue)
-            if songs:
-                self.current_index = self.queue.index(songs[start_index])
+            self.current_index = self.queue.index(songs[start_index]) if valid_start else -1
         else:
             self.queue = list(songs)
-            self.current_index = start_index
+            self.current_index = start_index if valid_start else -1
         self.is_paused = False
 
     def get_current_song(self) -> Optional[Song]:

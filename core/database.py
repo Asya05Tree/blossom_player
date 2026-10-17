@@ -7,6 +7,11 @@ from .models import Song, Playlist
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(BASE_DIR, "blossom.db")
 
+# Текст-плейсхолдер для песен, у которых текст ещё не добавлен — используется и
+# бриджем (показ в UI), и воркером массового поиска текста (чтобы понять, какие
+# песни ещё не обработаны).
+DEFAULT_LYRICS_PLACEHOLDER = "Текст песни пока не добавлен."
+
 def get_connection():
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     # Доступ к колонкам по имени: в старых БД порядок колонок может отличаться
@@ -202,6 +207,24 @@ def get_songs_missing_fingerprint() -> List[Song]:
         s for s in get_all_songs()
         if not s.fingerprint and s.filepath and os.path.isfile(s.filepath)
     ]
+
+
+def get_songs_without_lyrics() -> List[Song]:
+    """Песни без текста: поле пустое или содержит ещё не заменённый плейсхолдер."""
+    return [
+        s for s in get_all_songs()
+        if not (s.lyrics or "").strip() or (s.lyrics or "").strip() == DEFAULT_LYRICS_PLACEHOLDER
+    ]
+
+
+def update_song_lyrics(song_id: int, lyrics: str) -> bool:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute('UPDATE songs SET lyrics = ? WHERE id = ?', (lyrics, song_id))
+    conn.commit()
+    ok = cursor.rowcount > 0
+    conn.close()
+    return ok
 
 
 def get_playlist_by_name(name: str) -> Optional[Playlist]:

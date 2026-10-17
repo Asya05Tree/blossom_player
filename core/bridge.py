@@ -22,10 +22,11 @@ from .trim_util import trim_audio
 from .ocr_worker import OcrWorker
 from .text_search_worker import TextSearchDownloadWorker
 from .shazam_worker import ShazamWorker
+from .lyrics_worker import LyricsPreviewWorker, LyricsBulkWorker
 from typing import Optional
 from .text_style import strip_decor, wrap_artist, wrap_title
 
-DEFAULT_LYRICS = "Текст песни пока не добавлен."
+DEFAULT_LYRICS = db.DEFAULT_LYRICS_PLACEHOLDER
 MAX_PLAYLISTS_PER_SONG = 5
 
 
@@ -77,6 +78,12 @@ class BlossomBridge(QObject):
     shazamProgress = pyqtSignal(str)
     shazamFinished = pyqtSignal(str)
     shazamFailed = pyqtSignal(str)
+    lyricsPreviewReady = pyqtSignal(str)
+    lyricsPreviewFailed = pyqtSignal(str)
+    lyricsBulkStarted = pyqtSignal()
+    lyricsBulkProgress = pyqtSignal(str)
+    lyricsBulkFinished = pyqtSignal(str)
+    lyricsBulkFailed = pyqtSignal(str)
 
     def __init__(self, player: BlossomPlayer, drive: BlossomDriveManager):
         super().__init__()
@@ -98,6 +105,8 @@ class BlossomBridge(QObject):
         self._ocr_worker = None
         self._text_search_worker = None
         self._shazam_worker = None
+        self._lyrics_preview_worker = None
+        self._lyrics_bulk_worker = None
         db.init_db()
         self.player.player.positionChanged.connect(self._on_position_changed)
         self.player.player.durationChanged.connect(self._on_duration_changed)
@@ -109,6 +118,7 @@ class BlossomBridge(QObject):
         "_import_worker", "_youtube_import_worker", "_artist_import_worker", "_youtube_channel_worker",
         "_instrumental_search_worker", "_instrumental_download_worker", "_ocr_worker",
         "_text_search_worker", "_shazam_worker", "_duplicate_finder_worker", "_spotify_library_worker",
+        "_lyrics_preview_worker", "_lyrics_bulk_worker",
     )
 
     def _active_jobs(self) -> list:
@@ -204,7 +214,7 @@ class BlossomBridge(QObject):
             self.songChanged.emit(
                 0,
                 "Выбери трек",
-                "Библиотека пуста или на паузе",
+                "Включите песню",
                 "",
                 DEFAULT_LYRICS,
                 "",
@@ -1060,6 +1070,62 @@ class BlossomBridge(QObject):
         code = err.get("code", "UNKNOWN")
         message = err.get("message", "Не удалось распознать трек")
         self.shazamFailed.emit(f"[{stage}:{code}] {message}" if code != "SHAZAM_NO_MATCH" else message)
+
+    @pyqtSlot(str, str, str)
+    def searchLyricsPreview(self, title, artist, filepath):
+        """Разовый поиск текста для окна добавления локального трека (до сохранения в БД)."""
+        if self._lyrics_preview_worker and self._lyrics_preview_worker.isRunning():
+            self.lyricsPreviewFailed.emit("Поиск текста уже выполняется")
+            return
+        self._lyrics_preview_worker = LyricsPreviewWorker(
+            title=(title or "").strip(),
+            artist=(artist or "").strip() or "Unknown Artist",
+            filepath=filepath or "",
+        )
+        self._lyrics_preview_worker.finished_ok.connect(self._on_lyrics_preview_ok)
+        self._lyrics_preview_worker.finished_err.connect(self._on_lyrics_preview_err)
+        self._lyrics_preview_worker.start()
+
+    def _on_lyrics_preview_ok(self, payload):
+        self.lyricsPreviewReady.emit(json.dumps(payload, ensure_ascii=False))
+
+    def _on_lyrics_preview_err(self, err):
+        self.lyricsPreviewFailed.emit(err.get("message", "Не удалось найти текст"))
+
+    @pyqtSlot()
+    def findMissingLyrics(self):
+        """Настройки → «Найти текст песен для песен без текста»: массовый проход
+        по всей библиотеке, у кого текст ещё не заполнен."""
+        if self._lyrics_bulk_worker and self._lyrics_bulk_worker.isRunning():
+            self.lyricsBulkFailed.emit("Поиск уже выполняется")
+            return
+        self.lyricsBulkStarted.emit()
+        self._lyrics_bulk_worker = LyricsBulkWorker()
+        self._lyrics_bulk_worker.progress.connect(self.lyricsBulkProgress.emit)
+        self._lyrics_bulk_worker.finished_ok.connect(self._on_lyrics_bulk_ok)
+        self._lyrics_bulk_worker.finished_err.connect(self._on_lyrics_bulk_err)
+        self._lyrics_bulk_worker.start()
+
+    @pyqtSlot()
+    def stopFindMissingLyrics(self):
+        if self._lyrics_bulk_worker and self._lyrics_bulk_worker.isRunning():
+            self._lyrics_bulk_worker.request_stop()
+            self.lyricsBulkProgress.emit("Останавливаю…")
+
+    def _on_lyrics_bulk_ok(self, stats: dict):
+        self._emit_library()
+        self._update_ui_state()
+        text = (
+            f"Готово: найдено текстов {stats.get('found', 0)}, "
+            f"инструменталов {stats.get('instrumental', 0)}, "
+            f"ошибок {stats.get('failed', 0)} из {stats.get('total', 0)}"
+        )
+        if stats.get("stopped"):
+            text = "Остановлено. " + text
+        self.lyricsBulkFinished.emit(text)
+
+    def _on_lyrics_bulk_err(self, err: dict):
+        self.lyricsBulkFailed.emit(err.get("message", "Ошибка поиска текстов"))
 
     @pyqtSlot()
     def findDuplicates(self):

@@ -1,6 +1,7 @@
 # Secrets / local config
 config/app_settings.json
 config/spotify_client.json
+config/genius_client.json
 config/credentials.json
 config/token.json
 config/token_*.json

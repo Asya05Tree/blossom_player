@@ -10,6 +10,7 @@ LYRICS_DIR = os.path.join(ASSETS_DIR, "lyrics")
 TEMP_DIR = os.path.join(ASSETS_DIR, "temp")
 
 SPOTIFY_CLIENT_FILE = os.path.join(CONFIG_DIR, "spotify_client.json")
+GENIUS_CLIENT_FILE = os.path.join(CONFIG_DIR, "genius_client.json")
 SPOTIFY_CACHE_FILE = os.path.join(CONFIG_DIR, ".spotify_cache")
 GOOGLE_CREDENTIALS_FILE = os.path.join(CONFIG_DIR, "credentials.json")
 GOOGLE_TOKEN_FILE = os.path.join(CONFIG_DIR, "token.json")

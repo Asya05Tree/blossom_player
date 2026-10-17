@@ -73,7 +73,9 @@ class BlossomWindow(QMainWindow):
     def load_initial_library(self):
         songs = db.get_all_songs()
         if songs:
-            self.player.load_queue(songs, 0)
+            # -1 = ничего не выбрано: библиотека загружена (для next/prev), но
+            # ни одна песня не "включена" до явного клика по Play пользователем.
+            self.player.load_queue(songs, -1)
         def on_ready():
             self.bridge._update_ui_state()
             self.bridge._emit_library()

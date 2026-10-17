@@ -69,7 +69,7 @@
         <div class="now-playing-card">
             <img id="cover" class="cover-art" src="default_cover.png" alt="Cover">
             <h1 id="title" class="song-title">Выбери трек</h1>
-            <p id="artist" class="song-artist">Нажми Play или добавь музыку через +</p>
+            <p id="artist" class="song-artist">Включите песню</p>
             
             <div id="playlists" class="song-playlists" onclick="toggleLibrary()">Библиотека</div>
             <div id="next-preview" class="next-preview">Далее: —</div>
@@ -82,12 +82,12 @@
         </div>
 
         <div class="controls">
-            <button id="btn-shuffle" class="btn btn-ctrl btn-labeled" onclick="toggleShuffle()" title="Перемешать"><span id="shuffle-label">Перемешать</span></button>
-            <button id="btn-prev" class="btn btn-ctrl" onclick="prevTrack()" title="Назад"><span class="ico ico-prev"></span></button>
-            <button id="btn-play" class="btn btn-main" onclick="togglePlay()" title="Play / Pause"><span id="play-icon" class="ico ico-play"></span></button>
-            <button id="btn-stop" class="btn btn-ctrl" onclick="stopTrack()" title="Стоп"><span class="ico ico-stop"></span></button>
-            <button id="btn-next" class="btn btn-ctrl" onclick="nextTrack()" title="Вперёд"><span class="ico ico-next"></span></button>
-            <button id="btn-loop" class="btn btn-ctrl btn-labeled" onclick="cycleLoopMode()" title="Повтор"><span id="loop-label">По порядку</span></button>
+            <button id="btn-shuffle" class="btn btn-ctrl btn-labeled" onclick="toggleShuffle()" title="Перемешать" disabled><span id="shuffle-label">Перемешать</span></button>
+            <button id="btn-prev" class="btn btn-ctrl" onclick="prevTrack()" title="Назад" disabled><span class="ico ico-prev"></span></button>
+            <button id="btn-play" class="btn btn-main" onclick="togglePlay()" title="Play / Pause" disabled><span id="play-icon" class="ico ico-play"></span></button>
+            <button id="btn-stop" class="btn btn-ctrl" onclick="stopTrack()" title="Стоп" disabled><span class="ico ico-stop"></span></button>
+            <button id="btn-next" class="btn btn-ctrl" onclick="nextTrack()" title="Вперёд" disabled><span class="ico ico-next"></span></button>
+            <button id="btn-loop" class="btn btn-ctrl btn-labeled" onclick="cycleLoopMode()" title="Повтор" disabled><span id="loop-label">По порядку</span></button>
         </div>
 
         <div class="bottom-bar">
@@ -345,13 +345,26 @@
                 <input type="text" id="modal-path" class="cozy-input" readonly placeholder="Файл не выбран">
                 <button type="button" class="btn-modal btn-secondary" onclick="pickFile('audio')">Выбрать файл</button>
             </div>
+            <p style="font-size:11px;color:#9a86a4;margin:-4px 0 0">Если в имени файла есть тире — часть до него возьмём как исполнителя, после — как название</p>
             <input type="text" id="modal-title" class="cozy-input" placeholder="Название">
             <input type="text" id="modal-artist" class="cozy-input" placeholder="Исполнитель">
             <div class="file-row">
                 <input type="text" id="modal-cover" class="cozy-input" readonly placeholder="Обложка (необязательно)">
                 <button type="button" class="btn-modal btn-secondary" onclick="pickFile('cover_local')">Обложка</button>
             </div>
+            <img id="modal-cover-preview" class="edit-cover-preview hidden" src="" alt="">
+
+            <div class="library-tabs">
+                <button type="button" id="modal-lyrics-tab-manual" class="library-tab-btn active" onclick="switchModalLyricsTab('manual')">Текст вручную</button>
+                <button type="button" id="modal-lyrics-tab-auto" class="library-tab-btn" onclick="switchModalLyricsTab('auto')">Найти в интернете</button>
+            </div>
             <textarea id="modal-lyrics" class="cozy-input" placeholder="Текст песни..." style="height: 100px; resize: none;"></textarea>
+            <div id="modal-lyrics-auto-pane" class="hidden">
+                <button type="button" class="btn-modal btn-secondary" onclick="searchLocalAddLyrics()">Найти текст</button>
+                <p id="modal-lyrics-auto-status" class="import-status"></p>
+                <textarea id="modal-lyrics-auto-result" class="cozy-input" readonly placeholder="Текст появится здесь после поиска" style="height: 100px; resize: none;"></textarea>
+            </div>
+
             <div class="modal-actions">
                 <button type="button" class="btn-modal btn-primary" onclick="submitNewSong()">Сохранить</button>
                 <button type="button" class="btn-modal btn-ghost" onclick="toggleAddModal()">Отмена</button>
@@ -413,6 +426,21 @@
                 </div>
             </div>
 
+            <div style="margin-top:8px">
+                <h4 style="font-size:14px;color:#7e57c2;margin:0 0 8px 0">Текст песен</h4>
+                <p style="font-size:12px;color:#9a86a4;margin-bottom:6px">
+                    Ищет текст в интернете для треков без текста (по названию и исполнителю).
+                    Если не находит — пытается распознать трек через Shazam и повторяет поиск.
+                    Если текста всё равно нет (похоже на инструментал) — ставит значок ♬.
+                </p>
+                <div id="lyrics-bulk-log" class="spotify-auto-log" style="max-height:120px"></div>
+                <p id="lyrics-bulk-status" class="import-status"></p>
+                <div class="file-row">
+                    <button type="button" id="btn-lyrics-bulk-start" class="btn-modal btn-primary" onclick="startLyricsBulkSearch()">Найти текст песен без текста</button>
+                    <button type="button" id="btn-lyrics-bulk-stop" class="btn-modal btn-ghost" onclick="stopLyricsBulkSearch()" disabled>Остановить</button>
+                </div>
+            </div>
+
             <div class="modal-actions">
                 <button type="button" class="btn-modal btn-primary" onclick="applySettings()">Применить</button>
                 <button type="button" class="btn-modal btn-ghost" onclick="document.getElementById('settings-modal').style.display='none'">Закрыть</button>
@@ -432,6 +460,7 @@
                 <button type="button" class="btn-modal btn-secondary" onclick="pickFile('cover_edit')">Сменить</button>
             </div>
             <textarea id="edit-lyrics" class="cozy-input" style="height: 100px; resize: none;"></textarea>
+            <button type="button" class="btn-modal btn-ghost" onclick="deleteEditLyrics()" style="align-self:flex-start">Удалить текст</button>
             <div class="modal-actions">
                 <button type="button" class="btn-modal btn-primary" onclick="saveEditSong()">Сохранить</button>
                 <button type="button" class="btn-modal btn-ghost" onclick="closeEditModal()">Отмена</button>

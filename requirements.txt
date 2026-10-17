@@ -10,6 +10,8 @@ google-api-python-client
 Pillow
 spotapi
 easyocr
+requests
+beautifulsoup4
 sounddevice
 PyAudioWPatch  # Windows-only WASAPI loopback — Shazam "звук компьютера" (core/mic_record_util.py)
 
