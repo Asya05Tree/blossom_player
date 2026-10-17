@@ -1545,33 +1545,55 @@ function stopDuplicatesScan() {
     if (pyBridge && pyBridge.stopDuplicateScan) pyBridge.stopDuplicateScan();
 }
 
+/* Выполняет fn(item) по элементам items пачками по batchSize штук с паузой
+   delayMs между пачками (а не всё сразу одним тугим циклом). Каждый вызов
+   fn — это синхронный pyqtSlot (сетевой Drive-запрос + пересборка всей
+   библиотеки на Python-стороне + перерисовка DOM), и без пауз между пачками
+   десятки таких вызовов подряд забивали GUI-поток/QtWebChannel и роняли
+   приложение — та же причина, что и у краша при массовом удалении текста. */
+function runInBatches(items, batchSize, delayMs, fn, onDone) {
+    var i = 0;
+    function nextBatch() {
+        items.slice(i, i + batchSize).forEach(fn);
+        i += batchSize;
+        if (i < items.length) {
+            setTimeout(nextBatch, delayMs);
+        } else if (onDone) {
+            onDone();
+        }
+    }
+    if (items.length) nextBatch();
+    else if (onDone) onDone();
+}
+
 function autoResolveAllDuplicates() {
     if (!pyBridge || !lastDuplicateGroups.length) return;
-    var totalToDelete = 0;
     var totalGroups = 0;
-    var plan = lastDuplicateGroups.map(function(group) {
-        if (!group.songs || group.songs.length < 2) return [];
+    var idsToDelete = [];
+    lastDuplicateGroups.forEach(function(group) {
+        if (!group.songs || group.songs.length < 2) return;
         totalGroups += 1;
         var keepId = group.songs.reduce(function(best, s) {
             return (!best || (s.filesize || 0) > (best.filesize || 0)) ? s : best;
         }, null).id;
-        var toDelete = group.songs.filter(function(s) { return s.id !== keepId; }).map(function(s) { return s.id; });
-        totalToDelete += toDelete.length;
-        return toDelete;
+        group.songs.forEach(function(s) {
+            if (s.id !== keepId) idsToDelete.push(s.id);
+        });
     });
-    if (!totalToDelete) return;
+    if (!idsToDelete.length) return;
     if (!confirm(
-        "Удалить " + totalToDelete + " лишних копий в " + totalGroups + " группах? " +
+        "Удалить " + idsToDelete.length + " лишних копий в " + totalGroups + " группах? " +
         "В каждой группе останется одна песня (с наибольшим размером файла)."
     )) return;
-    plan.forEach(function(ids) { ids.forEach(function(id) { pyBridge.deleteSongById(id); }); });
-    document.getElementById("duplicates-list").innerHTML = "<p style='font-size:12px;color:#9a86a4'>Готово — лишние копии удалены.</p>";
-    lastDuplicateGroups = [];
-    var autoBtn = document.getElementById("btn-duplicates-auto");
-    if (autoBtn) {
-        autoBtn.disabled = true;
-        autoBtn.classList.add("hidden");
-    }
+    runInBatches(idsToDelete, 10, 400, function(id) { pyBridge.deleteSongById(id); }, function() {
+        document.getElementById("duplicates-list").innerHTML = "<p style='font-size:12px;color:#9a86a4'>Готово — лишние копии удалены.</p>";
+        lastDuplicateGroups = [];
+        var autoBtn = document.getElementById("btn-duplicates-auto");
+        if (autoBtn) {
+            autoBtn.disabled = true;
+            autoBtn.classList.add("hidden");
+        }
+    });
 }
 
 function _formatFilesize(bytes) {

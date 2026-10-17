@@ -14,6 +14,16 @@ from .text_style import strip_decor
 # потока — вероятная причина периодических жёстких крашей приложения).
 _BULK_DELAY_SECONDS = 1.0
 
+# Для операций без сетевого поиска (просто запись в БД/на Drive, как очистка
+# текста) отдельной паузы на каждую песню не было — когда у большинства песен
+# нет drive_meta_id, каждая итерация почти мгновенная, и цикл по сотням песен
+# без единой паузы засыпал GUI-поток/QtWebChannel сотнями сигналов progress
+# в секунду, из-за чего приложение падало. Теперь такие операции идут
+# пачками — пауза между пачками и один progress-сигнал на пачку, а не на
+# каждую песню.
+BATCH_SIZE = 10
+BATCH_PAUSE_SECONDS = 0.5
+
 
 class LyricsPreviewWorker(QThread):
     """Разовый поиск текста для одной песни (превью перед сохранением трека)."""
@@ -166,16 +176,21 @@ class ClearAllLyricsWorker(QThread):
         ]
         total = len(songs)
         cleared = 0
-        for idx, song in enumerate(songs, start=1):
+        for batch_start in range(0, total, BATCH_SIZE):
             if self._stop_requested:
                 break
-            title = strip_decor(song.title)
-            artist = strip_decor(song.artist)
-            self.progress.emit(f"({idx}/{total}) {artist} — {title}…")
-            db.update_song_lyrics(song.id, "")
-            if self.drive is not None:
-                push_song_meta(self.drive, song, title, artist, "")
-            cleared += 1
+            batch = songs[batch_start: batch_start + BATCH_SIZE]
+            self.progress.emit(f"Удаляю {batch_start + 1}–{batch_start + len(batch)} из {total}…")
+            for song in batch:
+                if self._stop_requested:
+                    break
+                title = strip_decor(song.title)
+                artist = strip_decor(song.artist)
+                db.update_song_lyrics(song.id, "")
+                if self.drive is not None:
+                    push_song_meta(self.drive, song, title, artist, "")
+                cleared += 1
+            time.sleep(BATCH_PAUSE_SECONDS)
         return {
             "total": total,
             "cleared": cleared,
