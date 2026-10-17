@@ -17,6 +17,7 @@ from .import_common import (
     safe_filename as _safe_filename,
     save_lyrics_local as _save_lyrics_local,
 )
+from .log_util import log_to_file
 
 
 def _add_to_artist_playlist(song_id: Optional[int], artist_name: str) -> None:
@@ -211,14 +212,15 @@ def import_spotify_track_safe(
     try:
         return import_spotify_track(track_url, drive, progress_callback=progress_callback, **kwargs)
     except BlossomError as exc:
-        return {"ok": False, "error": exc.to_dict()}
+        err = exc.to_dict()
+        log_to_file("spotify_import", f"{track_url} -> {err}", filename="download_errors.log")
+        return {"ok": False, "error": err}
     except Exception as exc:
-        return {
-            "ok": False,
-            "error": {
-                "stage": Stage.PIPELINE.value,
-                "code": "UNEXPECTED",
-                "message": "Непредвиденная ошибка импорта",
-                "detail": str(exc),
-            },
+        err = {
+            "stage": Stage.PIPELINE.value,
+            "code": "UNEXPECTED",
+            "message": "Непредвиденная ошибка импорта",
+            "detail": str(exc),
         }
+        log_to_file("spotify_import", f"{track_url} -> {err}", filename="download_errors.log")
+        return {"ok": False, "error": err}

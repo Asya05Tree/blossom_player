@@ -6,7 +6,7 @@ from .blossom_error import BlossomError, Stage, fail
 from .covers import save_and_resize_cover
 from .drive import BlossomDriveManager
 from .import_common import download_cover_from_url, ensure_artist_playlist, safe_filename, save_lyrics_local
-from .log_util import log
+from .log_util import log, log_to_file
 from .models import Song
 from .paths import COVERS_DIR
 from .text_style import wrap_artist, wrap_title
@@ -202,14 +202,15 @@ def import_youtube_track_safe(
     try:
         return import_youtube_track(url, drive, progress_callback=progress_callback, **kwargs)
     except BlossomError as exc:
-        return {"ok": False, "error": exc.to_dict()}
+        err = exc.to_dict()
+        log_to_file("youtube_import", f"{url} -> {err}", filename="download_errors.log")
+        return {"ok": False, "error": err}
     except Exception as exc:
-        return {
-            "ok": False,
-            "error": {
-                "stage": Stage.PIPELINE.value,
-                "code": "UNEXPECTED",
-                "message": "Непредвиденная ошибка импорта с YouTube",
-                "detail": str(exc),
-            },
+        err = {
+            "stage": Stage.PIPELINE.value,
+            "code": "UNEXPECTED",
+            "message": "Непредвиденная ошибка импорта с YouTube",
+            "detail": str(exc),
         }
+        log_to_file("youtube_import", f"{url} -> {err}", filename="download_errors.log")
+        return {"ok": False, "error": err}

@@ -47,7 +47,19 @@ def get_spotdl_client():
             # для трека на YouTube не нашлось чистого audio-only. Меняем фоллбэк на
             # "worst" (минимально возможное по весу видео, если без него никак) —
             # то же решение, что для прямых YouTube-ссылок в youtube_downloader.py.
-            "yt_dlp_args": "-f bestaudio/worst",
+            # "--retries 2" — у yt-dlp внутри spotdl дефолт 5 попыток на трек;
+            # при массовом импорте (SpotifyLibraryWorker) "Остановить" проверяется
+            # только МЕЖДУ треками, так что чем дольше yt-dlp бьётся за один
+            # сбойный трек, тем дольше кажется, что остановка не работает.
+            "yt_dlp_args": "-f bestaudio/worst --retries 2",
+            # spotdl по умолчанию САМ ищет текст на genius/azlyrics/musixmatch и
+            # сам скачивает обложку для каждого трека — лишние сетевые запросы
+            # (у нас уже есть свой поиск текста в core/lyrics_service.py и своя
+            # загрузка обложки в core/covers.py) и лишний источник ошибок:
+            # сбой любого из трёх lyrics-провайдеров внутри spotdl мог завалить
+            # весь download() трека, даже если аудио скачалось нормально.
+            "lyrics_providers": [],
+            "skip_album_art": True,
         },
     )
     return _spotdl_instance

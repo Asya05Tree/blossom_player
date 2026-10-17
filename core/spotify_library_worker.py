@@ -7,6 +7,7 @@ from . import database as db
 from .blossom_error import BlossomError
 from .drive import BlossomDriveManager
 from .import_pipeline import import_spotify_track_safe
+from .log_util import log_to_file
 from .models import Playlist
 from .paths import TEMP_DIR
 from .spotify_web_service import create_web_login, fetch_user_library_web, get_saved_sp_dc
@@ -59,14 +60,18 @@ class SpotifyLibraryWorker(QThread):
             stats = self._run_import()
             self.finished_ok.emit(stats)
         except BlossomError as exc:
-            self.finished_err.emit(exc.to_dict())
+            err = exc.to_dict()
+            log_to_file("spotify_library", str(err), filename="download_errors.log")
+            self.finished_err.emit(err)
         except Exception as exc:
-            self.finished_err.emit({
+            err = {
                 "stage": "pipeline",
                 "code": "SPOTIFY_LIBRARY_CRASH",
                 "message": "Ошибка импорта библиотеки Spotify",
                 "detail": str(exc),
-            })
+            }
+            log_to_file("spotify_library", str(err), filename="download_errors.log")
+            self.finished_err.emit(err)
 
     def _run_import(self) -> dict:
         from .blossom_error import Stage, fail
@@ -170,4 +175,5 @@ class SpotifyLibraryWorker(QThread):
 
         error = result.get("error") or {}
         self.progress.emit(f"[{done}/{total}] Не получилось: {label} ({error.get('code', 'ERR')})")
+        log_to_file("spotify_library", f"{label}: {error}", filename="download_errors.log")
         return None, "failed"

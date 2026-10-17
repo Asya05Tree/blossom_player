@@ -1,6 +1,5 @@
 import json
 import os
-import time
 
 from PyQt6.QtCore import QThread, pyqtSignal
 
@@ -10,11 +9,10 @@ from .models import Song
 from .paths import DOWNLOADS_DIR, COVERS_DIR
 from .text_style import wrap_title, wrap_artist
 
-# Небольшая пауза после каждой синхронизированной песни — та же причина, что
-# и в core/lyrics_worker.py: много Drive-запросов (SSL/сокеты) подряд без
-# единого промежутка из фонового потока — подтверждённая по дампам крашей
-# причина падений приложения (см. память crash_debugging).
-_SYNC_ITEM_PAUSE_SECONDS = 0.3
+# Раньше тут была искусственная пауза после каждой синхронизированной песни —
+# добавлена пока настоящая причина крашей (гонка потоков на общем
+# self.service, см. core/drive.py) была не найдена. Теперь исправлено
+# RLock'ом в самом Drive-клиенте, так что синхронизация идёт без пауз.
 
 
 class DriveSyncWorker(QThread):
@@ -91,7 +89,6 @@ class DriveSyncWorker(QThread):
                 )
                 db.add_song(song)
                 synced += 1
-                time.sleep(_SYNC_ITEM_PAUSE_SECONDS)
 
             # Восстановление плейлистов из Meta/playlists.json
             try:

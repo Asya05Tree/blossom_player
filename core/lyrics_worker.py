@@ -14,23 +14,15 @@ from .text_style import strip_decor
 # потока — вероятная причина периодических жёстких крашей приложения).
 _BULK_DELAY_SECONDS = 1.0
 
-# Для операций без сетевого поиска (просто запись в БД/на Drive, как очистка
-# текста) отдельной паузы на каждую песню не было — когда у большинства песен
-# нет drive_meta_id, каждая итерация почти мгновенная, и цикл по сотням песен
-# без единой паузы засыпал GUI-поток/QtWebChannel сотнями сигналов progress
-# в секунду, из-за чего приложение падало. Теперь такие операции идут
-# пачками — пауза между пачками и один progress-сигнал на пачку, а не на
-# каждую песню.
-BATCH_SIZE = 10
-BATCH_PAUSE_SECONDS = 0.5
-
-# Пауза именно после сетевого запроса к Drive (а не просто между пачками) —
-# реальный краш (0xc0000005 в ntdll.dll, стек через libssl/libcrypto/ws2_32/
-# mswsock) происходил внутри TLS/socket-стека именно во время таких Drive-
-# запросов, когда они шли подряд без паузы внутри одной пачки (пауза между
-# пачками не спасала, если в пачке 10 песен с drive_meta_id — все 10 сетевых
-# вызовов всё равно летели одной серией без единого промежутка).
-DRIVE_CALL_PAUSE_SECONDS = 0.3
+# BATCH_SIZE группирует progress-сигналы (один на пачку, а не один на каждую
+# песню) — так цикл по сотням песен не заливает GUI-поток/QtWebChannel сотнями
+# сигналов в секунду. Раньше здесь были ещё DRIVE_CALL_PAUSE_SECONDS/
+# BATCH_PAUSE_SECONDS — искусственные паузы вокруг каждого Drive-запроса,
+# добавленные пока настоящая причина крашей была не найдена. Реальная причина
+# оказалась гонкой потоков на общем self.service (см. core/drive.py,
+# threading.RLock) — она исправлена на уровне Drive-клиента, так что пачки
+# теперь обрабатываются быстро и без искусственных задержек.
+BATCH_SIZE = 25
 
 
 class LyricsPreviewWorker(QThread):
@@ -131,8 +123,8 @@ class LyricsBulkWorker(QThread):
             blocked_in_a_row = 0
             lyrics = result.get("lyrics") or INSTRUMENTAL_MARK
             db.update_song_lyrics(song.id, lyrics)
-            if self.drive is not None and push_song_meta(self.drive, song, title, artist, lyrics):
-                time.sleep(DRIVE_CALL_PAUSE_SECONDS)
+            if self.drive is not None:
+                push_song_meta(self.drive, song, title, artist, lyrics)
             if status == "instrumental":
                 instrumental += 1
             else:
@@ -195,10 +187,9 @@ class ClearAllLyricsWorker(QThread):
                 title = strip_decor(song.title)
                 artist = strip_decor(song.artist)
                 db.update_song_lyrics(song.id, "")
-                if self.drive is not None and push_song_meta(self.drive, song, title, artist, ""):
-                    time.sleep(DRIVE_CALL_PAUSE_SECONDS)
+                if self.drive is not None:
+                    push_song_meta(self.drive, song, title, artist, "")
                 cleared += 1
-            time.sleep(BATCH_PAUSE_SECONDS)
         return {
             "total": total,
             "cleared": cleared,
