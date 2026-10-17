@@ -68,6 +68,13 @@ def init_db():
         cursor.execute("ALTER TABLE songs ADD COLUMN added_at INTEGER")
     except Exception:
         pass
+    try:
+        # LRC-текст с таймкодами строк (из lrclib.net) — для караоке-подсветки
+        # во время воспроизведения. Отдельно от lyrics (обычный текст без
+        # таймкодов), потому что не у каждой песни есть синхронизированный текст.
+        cursor.execute("ALTER TABLE songs ADD COLUMN synced_lyrics TEXT")
+    except Exception:
+        pass
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS playlists (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -119,6 +126,7 @@ def _row_to_song(row) -> Song:
         youtube_video_id=_get("youtube_video_id"),
         fingerprint=_get("fingerprint"),
         added_at=_get("added_at"),
+        synced_lyrics=_get("synced_lyrics"),
     )
 
 
@@ -229,6 +237,16 @@ def update_song_lyrics(song_id: int, lyrics: str) -> bool:
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute('UPDATE songs SET lyrics = ? WHERE id = ?', (lyrics, song_id))
+    conn.commit()
+    ok = cursor.rowcount > 0
+    conn.close()
+    return ok
+
+
+def update_song_synced_lyrics(song_id: int, synced_lyrics: str) -> bool:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute('UPDATE songs SET synced_lyrics = ? WHERE id = ?', (synced_lyrics or None, song_id))
     conn.commit()
     ok = cursor.rowcount > 0
     conn.close()

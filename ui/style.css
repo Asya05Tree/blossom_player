@@ -772,6 +772,19 @@ button.icon-btn {
     color: #5C4B6A;
 }
 
+.karaoke-line {
+    padding: 4px 0;
+    opacity: 0.55;
+    transition: opacity 0.2s, color 0.2s, transform 0.2s;
+}
+
+.karaoke-line.karaoke-active {
+    opacity: 1;
+    color: #B84FA0;
+    font-weight: 600;
+    transform: scale(1.05);
+}
+
 ::-webkit-scrollbar {
     width: 6px;
 }

@@ -2,6 +2,7 @@ import os
 import time
 from typing import Any
 
+from mutagen import File as MutagenFile
 from mutagen.easyid3 import EasyID3
 
 from .blossom_error import BlossomError, Stage, fail
@@ -30,6 +31,31 @@ def _validate_local_audio(path: str) -> str:
     if size <= 0:
         fail(Stage.SPOTIFY_DOWNLOAD, "AUDIO_FILE_EMPTY", "Скачанный файл пустой", path)
     return path
+
+
+def _validate_duration(path: str, expected_ms: int) -> None:
+    """Сверяет длительность скачанного файла с длительностью трека в Spotify —
+    yt-dlp иногда находит "похожее" видео на YouTube (концерт, минус, чужой
+    ремикс длиннее/короче оригинала), и без этой проверки такой файл тихо
+    сохранялся бы в библиотеку под правильными названием/автором."""
+    if not expected_ms:
+        return
+    try:
+        audio = MutagenFile(path)
+        actual_seconds = audio.info.length if audio and audio.info else 0
+    except Exception:
+        return
+    if not actual_seconds:
+        return
+    expected_seconds = expected_ms / 1000
+    tolerance = max(15.0, expected_seconds * 0.25)
+    if abs(actual_seconds - expected_seconds) > tolerance:
+        fail(
+            Stage.SPOTIFY_DOWNLOAD,
+            "AUDIO_DURATION_MISMATCH",
+            "Скачанный файл не похож на нужный трек по длительности — похоже, нашлось не то видео",
+            f"ожидали ~{expected_seconds:.0f} сек, получили ~{actual_seconds:.0f} сек",
+        )
 
 
 def _read_tags(path: str, fallback_title: str, fallback_artist: str) -> dict[str, str]:
@@ -68,6 +94,7 @@ def _download_with_spotdl_api(track_url: str, meta: dict[str, Any]) -> dict[str,
     # скачивания) — сюда доходим только с реальным путём к реальному файлу ЭТОГО
     # трека, больше никакого угадывания "самого свежего файла в папке".
     path = _validate_local_audio(str(downloaded))
+    _validate_duration(path, meta.get("duration_ms") or 0)
 
     auto_lyrics = ""
     if song_obj and getattr(song_obj, "lyrics", None):

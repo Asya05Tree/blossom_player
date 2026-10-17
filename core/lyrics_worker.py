@@ -1,11 +1,26 @@
+import os
 import time
 
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from . import database as db
 from .drive_meta_sync import push_song_meta
+from .lrclib_service import fetch_synced_lyrics
 from .lyrics_service import INSTRUMENTAL_MARK, resolve_lyrics_for_song
 from .text_style import strip_decor
+
+
+def _audio_duration_seconds(filepath: str) -> float:
+    """Длительность трека нужна lrclib.net для точного совпадения записи
+    (одно название часто встречается в нескольких версиях разной длины)."""
+    if not filepath or not os.path.isfile(filepath):
+        return 0.0
+    try:
+        from mutagen import File as MutagenFile
+        audio = MutagenFile(filepath)
+        return float(audio.info.length) if audio and audio.info else 0.0
+    except Exception:
+        return 0.0
 
 # Пауза между песнями в массовом поиске — чтобы не долбить Genius пачкой
 # запросов подряд (повышает риск временной блокировки) и не прогонять через
@@ -195,3 +210,27 @@ class ClearAllLyricsWorker(QThread):
             "cleared": cleared,
             "stopped": self._stop_requested,
         }
+
+
+class SyncedLyricsWorker(QThread):
+    """Разовый фоновый поиск караоке-текста (с таймкодами) для одной песни —
+    запускается при включении трека, если для него ещё не пробовали искать."""
+
+    finished_ok = pyqtSignal(int, str)   # song_id, lrc text ("" если не нашли)
+    finished_err = pyqtSignal(int, str)  # song_id, сообщение об ошибке
+
+    def __init__(self, song_id: int, title: str, artist: str, filepath: str = ""):
+        super().__init__()
+        self.song_id = song_id
+        self.title = title
+        self.artist = artist
+        self.filepath = filepath
+
+    def run(self):
+        try:
+            duration = _audio_duration_seconds(self.filepath)
+            lrc = fetch_synced_lyrics(self.title, self.artist, duration)
+            db.update_song_synced_lyrics(self.song_id, lrc)
+            self.finished_ok.emit(self.song_id, lrc)
+        except Exception as exc:
+            self.finished_err.emit(self.song_id, str(exc))

@@ -22,7 +22,7 @@ from .trim_util import trim_audio
 from .ocr_worker import OcrWorker
 from .text_search_worker import TextSearchDownloadWorker
 from .shazam_worker import ShazamWorker
-from .lyrics_worker import LyricsPreviewWorker, LyricsBulkWorker, ClearAllLyricsWorker
+from .lyrics_worker import LyricsPreviewWorker, LyricsBulkWorker, ClearAllLyricsWorker, SyncedLyricsWorker
 from .drive_meta_sync import push_song_meta
 from typing import Optional
 from .text_style import strip_decor, wrap_artist, wrap_title
@@ -32,7 +32,7 @@ MAX_PLAYLISTS_PER_SONG = 5
 
 
 class BlossomBridge(QObject):
-    songChanged = pyqtSignal(int, str, str, str, str, str, str, bool, bool, bool)
+    songChanged = pyqtSignal(int, str, str, str, str, str, str, bool, bool, bool, str)
     nextSongPreview = pyqtSignal(str)
     playlistListUpdated = pyqtSignal(list)
     importStarted = pyqtSignal(str)
@@ -85,6 +85,7 @@ class BlossomBridge(QObject):
     lyricsBulkProgress = pyqtSignal(str)
     lyricsBulkFinished = pyqtSignal(str)
     lyricsBulkFailed = pyqtSignal(str)
+    syncedLyricsReady = pyqtSignal(int, str)
 
     def __init__(self, player: BlossomPlayer, drive: BlossomDriveManager):
         super().__init__()
@@ -109,6 +110,8 @@ class BlossomBridge(QObject):
         self._lyrics_preview_worker = None
         self._lyrics_bulk_worker = None
         self._clear_all_lyrics_worker = None
+        self._synced_lyrics_worker = None
+        self._synced_lyrics_tried_song_id = None
         db.init_db()
         self.player.player.positionChanged.connect(self._on_position_changed)
         self.player.player.durationChanged.connect(self._on_duration_changed)
@@ -121,6 +124,7 @@ class BlossomBridge(QObject):
         "_instrumental_search_worker", "_instrumental_download_worker", "_ocr_worker",
         "_text_search_worker", "_shazam_worker", "_duplicate_finder_worker", "_spotify_library_worker",
         "_lyrics_preview_worker", "_lyrics_bulk_worker", "_clear_all_lyrics_worker",
+        "_synced_lyrics_worker",
     )
 
     def _active_jobs(self) -> list:
@@ -224,6 +228,7 @@ class BlossomBridge(QObject):
                 False,
                 False,
                 False,
+                "",
             )
             return
 
@@ -253,7 +258,28 @@ class BlossomBridge(QObject):
             has_prev,
             has_next,
             has_lyrics_content,
+            song.synced_lyrics or "",
         )
+
+        # synced_lyrics is None -> ещё не пробовали искать караоке-текст для
+        # этой песни. "" (не None) значит "искали, не нашли" — не долбим lrclib
+        # заново на каждое включение трека.
+        if (
+            has_lyrics_content
+            and song.synced_lyrics is None
+            and self._synced_lyrics_tried_song_id != song.id
+            and not (self._synced_lyrics_worker and self._synced_lyrics_worker.isRunning())
+        ):
+            self._synced_lyrics_tried_song_id = song.id
+            self._synced_lyrics_worker = SyncedLyricsWorker(
+                song.id, strip_decor(song.title), strip_decor(song.artist), song.filepath or "",
+            )
+            self._synced_lyrics_worker.finished_ok.connect(self._on_synced_lyrics_ok)
+            self._synced_lyrics_worker.finished_err.connect(lambda sid, msg: None)
+            self._synced_lyrics_worker.start()
+
+    def _on_synced_lyrics_ok(self, song_id: int, lrc: str):
+        self.syncedLyricsReady.emit(song_id, lrc)
 
     @pyqtSlot(result=str)
     def getDriveStatus(self) -> str:
@@ -1015,7 +1041,11 @@ class BlossomBridge(QObject):
 
     @pyqtSlot(float, str)
     def startShazamListen(self, listen_seconds, source="mic"):
-        self._start_shazam(audio_path="", listen_seconds=listen_seconds or 8.0, source=source or "mic")
+        # Клэмп на бэкенде — не доверяем, что JS-поле не прислало что-то за
+        # пределами 8–30 сек (слишком короткая запись Shazam не распознаёт,
+        # слишком длинная просто тратит время пользователя без выигрыша).
+        clamped = max(8.0, min(30.0, float(listen_seconds or 8.0)))
+        self._start_shazam(audio_path="", listen_seconds=clamped, source=source or "mic")
 
     @pyqtSlot(str)
     def identifyFromAudioFile(self, audio_path):

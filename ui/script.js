@@ -76,10 +76,10 @@ function onDriveReady(data) {
 }
 
 function wireBridgeSignals() {
-    pyBridge.songChanged.connect(function(songId, title, artist, cover, lyrics, video, playlists, has_prev, has_next, has_lyrics) {
+    pyBridge.songChanged.connect(function(songId, title, artist, cover, lyrics, video, playlists, has_prev, has_next, has_lyrics, synced_lyrics) {
         document.getElementById("title").innerText = title;
         document.getElementById("artist").innerText = artist;
-        document.getElementById("lyrics").innerText = lyrics;
+        currentPlainLyrics = lyrics;
         document.getElementById("cover").src = resolveCoverSrc(cover);
         const bp = document.getElementById("btn-prev");
         const bn = document.getElementById("btn-next");
@@ -88,6 +88,7 @@ function wireBridgeSignals() {
         const hasSong = !!songId;
         setPlaybackControlsEnabled(hasSong);
         setLyricsPanelAvailable(!!has_lyrics);
+        setKaraokeLyrics(synced_lyrics || "");
         if (!hasSong) {
             isPlaying = false;
             setPlayIcon(false);
@@ -101,6 +102,14 @@ function wireBridgeSignals() {
         currentPlayingSongId = songId || null;
         refreshActivePlaylistHighlight();
     });
+
+    if (pyBridge.syncedLyricsReady) {
+        pyBridge.syncedLyricsReady.connect(function(songId, lrc) {
+            if (songId === currentPlayingSongId) {
+                setKaraokeLyrics(lrc || "");
+            }
+        });
+    }
 
     if (pyBridge.nextSongPreview) {
         pyBridge.nextSongPreview.connect(function(nextTitle) {
@@ -403,6 +412,7 @@ function wireBridgeSignals() {
 
     if (pyBridge.shazamFinished) {
         pyBridge.shazamFinished.connect(function(title) {
+            _clearShazamCountdown();
             setShazamStatus("Готово: " + title, false, true);
             setShazamLock(false);
             hideBusyOverlay("shazam");
@@ -412,6 +422,7 @@ function wireBridgeSignals() {
 
     if (pyBridge.shazamFailed) {
         pyBridge.shazamFailed.connect(function(msg) {
+            _clearShazamCountdown();
             setShazamStatus(msg, true);
             setShazamLock(false);
             hideBusyOverlay("shazam");
@@ -910,6 +921,84 @@ function setPlaybackControlsEnabled(enabled) {
     });
 }
 
+/* === Караоке: подсветка текущей строки текста в такт воспроизведению === */
+var currentPlainLyrics = "";
+var currentSyncedLines = [];   // [{time: ms, text: str}, ...]
+var karaokeModeOn = false;
+
+function parseLrc(lrcText) {
+    if (!lrcText) return [];
+    var lines = [];
+    var re = /^\[(\d+):(\d+(?:\.\d+)?)\](.*)$/;
+    lrcText.split("\n").forEach(function(raw) {
+        var m = re.exec(raw);
+        if (!m) return;
+        var ms = (parseInt(m[1], 10) * 60 + parseFloat(m[2])) * 1000;
+        lines.push({ time: ms, text: m[3].trim() });
+    });
+    lines.sort(function(a, b) { return a.time - b.time; });
+    return lines;
+}
+
+function setKaraokeLyrics(lrcText) {
+    currentSyncedLines = parseLrc(lrcText);
+    var btn = document.getElementById("btn-karaoke-panel");
+    var available = currentSyncedLines.length > 0;
+    if (btn) {
+        btn.disabled = !available;
+        btn.title = available ? "Подсветка текста в такт песне" : "Для этой песни нет текста с таймкодами";
+    }
+    if (!available && karaokeModeOn) {
+        karaokeModeOn = false;
+    }
+    renderLyricsBox();
+}
+
+function toggleKaraokeMode() {
+    if (currentSyncedLines.length === 0) return;
+    karaokeModeOn = !karaokeModeOn;
+    var btn = document.getElementById("btn-karaoke-panel");
+    if (btn) btn.classList.toggle("btn-active", karaokeModeOn);
+    var panel = document.getElementById("side-panel");
+    if (karaokeModeOn && panel && panel.classList.contains("hidden")) {
+        panel.classList.remove("hidden");
+    }
+    renderLyricsBox();
+}
+
+function renderLyricsBox() {
+    var box = document.getElementById("lyrics");
+    if (!box) return;
+    if (karaokeModeOn && currentSyncedLines.length > 0) {
+        box.innerHTML = currentSyncedLines.map(function(line, i) {
+            return '<div class="karaoke-line" data-index="' + i + '">' + (escapeHtml(line.text) || "&nbsp;") + "</div>";
+        }).join("");
+    } else {
+        box.innerText = currentPlainLyrics;
+    }
+}
+
+function updateKaraokeHighlight(posMs) {
+    if (!karaokeModeOn || currentSyncedLines.length === 0) return;
+    var active = -1;
+    for (var i = 0; i < currentSyncedLines.length; i++) {
+        if (currentSyncedLines[i].time <= posMs) active = i; else break;
+    }
+    var box = document.getElementById("lyrics");
+    if (!box) return;
+    var nodes = box.querySelectorAll(".karaoke-line");
+    nodes.forEach(function(node, i) {
+        if (i === active) {
+            if (!node.classList.contains("karaoke-active")) {
+                node.classList.add("karaoke-active");
+                node.scrollIntoView({ block: "center", behavior: "smooth" });
+            }
+        } else {
+            node.classList.remove("karaoke-active");
+        }
+    });
+}
+
 function setLyricsPanelAvailable(hasLyrics) {
     var btn = document.getElementById("btn-lyrics-panel");
     if (btn) {
@@ -1351,15 +1440,39 @@ function setShazamLock(locked) {
     if (fileBtn) fileBtn.disabled = locked;
 }
 
+let _shazamCountdownTimer = null;
+
+function _clearShazamCountdown() {
+    if (_shazamCountdownTimer) {
+        clearInterval(_shazamCountdownTimer);
+        _shazamCountdownTimer = null;
+    }
+}
+
+function _runShazamCountdown(seconds, label) {
+    _clearShazamCountdown();
+    let remaining = seconds;
+    setShazamStatus(label + ": осталось " + remaining + " сек…");
+    _shazamCountdownTimer = setInterval(function() {
+        remaining -= 1;
+        if (remaining <= 0) {
+            _clearShazamCountdown();
+            setShazamStatus("Распознаю трек…");
+            return;
+        }
+        setShazamStatus(label + ": осталось " + remaining + " сек…");
+    }, 1000);
+}
+
 function startShazamListen() {
     if (!pyBridge || !pyBridge.startShazamListen) return;
-    const seconds = parseFloat(document.getElementById("shazam-seconds").value) || 8;
+    let seconds = Math.round(parseFloat(document.getElementById("shazam-seconds").value) || 8);
+    seconds = Math.max(8, Math.min(30, seconds));
+    document.getElementById("shazam-seconds").value = seconds;
     const sourceEl = document.getElementById("shazam-source");
     const source = (sourceEl && sourceEl.value) || "mic";
     setShazamLock(true);
-    setShazamStatus(
-        (source === "loopback" ? "Слушаю звук компьютера " : "Слушаю микрофон ") + seconds + " сек…"
-    );
+    _runShazamCountdown(seconds, source === "loopback" ? "Слушаю звук компьютера" : "Слушаю микрофон");
     pyBridge.startShazamListen(seconds, source);
 }
 
@@ -1965,6 +2078,7 @@ function updateProgressBar(pos, dur) {
     }
     if (cur) cur.innerText = formatTime(pos);
     if (tot) tot.innerText = formatTime(dur);
+    updateKaraokeHighlight(pos);
 }
 
 function onSeek(value) {

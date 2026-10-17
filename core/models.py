@@ -16,6 +16,7 @@ class Song:
     filepath: str = ""              # Путь к локальному аудиофайлу
     cover_path: Optional[str] = None # Путь к картинке песни
     lyrics: Optional[str] = ""      # Текст песни
+    synced_lyrics: Optional[str] = None  # LRC с таймкодами строк (для караоке-подсветки)
     video_link: Optional[str] = None # Ссылка на клип
     drive_file_id: Optional[str] = None # ID аудио в Google Drive
     drive_cover_id: Optional[str] = None
