@@ -24,6 +24,14 @@ _BULK_DELAY_SECONDS = 1.0
 BATCH_SIZE = 10
 BATCH_PAUSE_SECONDS = 0.5
 
+# Пауза именно после сетевого запроса к Drive (а не просто между пачками) —
+# реальный краш (0xc0000005 в ntdll.dll, стек через libssl/libcrypto/ws2_32/
+# mswsock) происходил внутри TLS/socket-стека именно во время таких Drive-
+# запросов, когда они шли подряд без паузы внутри одной пачки (пауза между
+# пачками не спасала, если в пачке 10 песен с drive_meta_id — все 10 сетевых
+# вызовов всё равно летели одной серией без единого промежутка).
+DRIVE_CALL_PAUSE_SECONDS = 0.3
+
 
 class LyricsPreviewWorker(QThread):
     """Разовый поиск текста для одной песни (превью перед сохранением трека)."""
@@ -123,8 +131,8 @@ class LyricsBulkWorker(QThread):
             blocked_in_a_row = 0
             lyrics = result.get("lyrics") or INSTRUMENTAL_MARK
             db.update_song_lyrics(song.id, lyrics)
-            if self.drive is not None:
-                push_song_meta(self.drive, song, title, artist, lyrics)
+            if self.drive is not None and push_song_meta(self.drive, song, title, artist, lyrics):
+                time.sleep(DRIVE_CALL_PAUSE_SECONDS)
             if status == "instrumental":
                 instrumental += 1
             else:
@@ -187,8 +195,8 @@ class ClearAllLyricsWorker(QThread):
                 title = strip_decor(song.title)
                 artist = strip_decor(song.artist)
                 db.update_song_lyrics(song.id, "")
-                if self.drive is not None:
-                    push_song_meta(self.drive, song, title, artist, "")
+                if self.drive is not None and push_song_meta(self.drive, song, title, artist, ""):
+                    time.sleep(DRIVE_CALL_PAUSE_SECONDS)
                 cleared += 1
             time.sleep(BATCH_PAUSE_SECONDS)
         return {

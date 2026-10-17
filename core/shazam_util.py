@@ -8,9 +8,26 @@ API, которым пользуется shazamio (Recognizer/Signature/SearchPa
 """
 import asyncio
 import os
+import sys
 
 from .blossom_error import Stage, fail
 from .ffmpeg_util import resolve_ffmpeg
+
+if sys.platform == "win32":
+    # ProactorEventLoop (стандартная политика asyncio на Windows) закрывает
+    # транспорты через IOCP асинхронно — если aiohttp (используется внутри
+    # shazamio) не успевает полностью завершить shutdown TLS-соединения до
+    # того, как asyncio.run() закрывает петлю, OS может доставить completion
+    # уже в освобождённую память. Это известный класс крашей aiohttp+Proactor
+    # на Windows (access violation в ntdll при обращении по адресу -1) —
+    # и именно такой краш (ntdll.dll, код 0xc0000005) периодически ронял всё
+    # приложение. SelectorEventLoop не использует IOCP и этой проблеме не
+    # подвержен; shazamio использует только HTTP(aiohttp), которому для
+    # работы не нужны специфичные для Proactor возможности (трубы/subprocess).
+    try:
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    except AttributeError:
+        pass
 
 
 def _ensure_ffmpeg_on_path() -> None:

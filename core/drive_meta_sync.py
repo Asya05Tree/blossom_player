@@ -5,15 +5,19 @@ import re
 from .paths import TEMP_DIR
 
 
-def push_song_meta(drive, song, title: str, artist: str, lyrics: str) -> None:
+def push_song_meta(drive, song, title: str, artist: str, lyrics: str) -> bool:
     """Перезаписывает meta.json песни на Drive с актуальным текстом песни.
 
     Без этого текст, найденный один раз (вручную или массовым поиском),
     пришлось бы искать повторно после синхронизации на другом устройстве —
     DriveSyncWorker восстанавливает lyrics именно из поля meta.json, а не из
-    отдельного .txt файла в папке Lyrics."""
+    отдельного .txt файла в папке Lyrics.
+
+    Возвращает True, если реально сходили в сеть (нужно вызывающему коду,
+    чтобы делать паузу между песнями только когда она нужна — не у каждой
+    песни есть drive_meta_id)."""
     if not (drive.service and song.drive_meta_id):
-        return
+        return False
     try:
         stem = re.sub(r'[<>:"/\\|?*]+', "", f"{artist}_{title}")
         stem = re.sub(r"\s+", "_", stem).strip("._")[:120] or "track"
@@ -30,5 +34,6 @@ def push_song_meta(drive, song, title: str, artist: str, lyrics: str) -> None:
         with open(local_meta, "w", encoding="utf-8") as fh:
             json.dump(meta, fh, ensure_ascii=False, indent=2)
         drive.update_file(song.drive_meta_id, local_meta)
+        return True
     except Exception:
-        pass
+        return False
