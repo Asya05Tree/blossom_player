@@ -103,6 +103,7 @@ function wireBridgeSignals() {
         }
         currentPlayingSongId = songId || null;
         refreshActivePlaylistHighlight();
+        renderLibrary(librarySongs);
     });
 
     if (pyBridge.spectrumReady) {
@@ -363,26 +364,6 @@ function wireBridgeSignals() {
         });
     }
 
-    if (pyBridge.tiktokCandidateFound) {
-        pyBridge.tiktokCandidateFound.connect(function(json) {
-            var data = {};
-            try { data = typeof json === "string" ? JSON.parse(json) : json; } catch (e) {}
-            if (data && data.title) _appendTikTokCandidate(data);
-        });
-    }
-
-    if (pyBridge.tiktokCandidateDownloadReady) {
-        pyBridge.tiktokCandidateDownloadReady.connect(function(title) {
-            showToast("Скачано: " + title, false);
-        });
-    }
-
-    if (pyBridge.tiktokCandidateDownloadFailed) {
-        pyBridge.tiktokCandidateDownloadFailed.connect(function(msg) {
-            showToast(msg, true);
-        });
-    }
-
     if (pyBridge.instrumentalStarted) {
         pyBridge.instrumentalStarted.connect(function() {
             showToast("Ищу инструментал на YouTube…", false);
@@ -480,52 +461,6 @@ function wireBridgeSignals() {
             setShazamStatus(msg, true);
             setShazamLock(false);
             hideBusyOverlay("shazam");
-        });
-    }
-
-    if (pyBridge.ocrFinished) {
-        pyBridge.ocrFinished.connect(function(lines) {
-            document.getElementById("btn-ocr-run").disabled = false;
-            setOcrStatus("Готово. Выбери строку, которую скачать.", false, true);
-            hideBusyOverlay("ocr");
-            renderOcrResults(lines || []);
-        });
-    }
-
-    if (pyBridge.ocrFailed) {
-        pyBridge.ocrFailed.connect(function(msg) {
-            document.getElementById("btn-ocr-run").disabled = false;
-            setOcrStatus(msg, true);
-            hideBusyOverlay("ocr");
-        });
-    }
-
-    if (pyBridge.textSearchStarted) {
-        pyBridge.textSearchStarted.connect(function() {
-            showToast("Ищу на YouTube…", false);
-            showBusyOverlay("textSearch", "Ищу на YouTube…");
-        });
-    }
-
-    if (pyBridge.textSearchProgress) {
-        pyBridge.textSearchProgress.connect(function(msg) {
-            showToast(msg, false);
-            updateBusyOverlay(msg);
-        });
-    }
-
-    if (pyBridge.textSearchFinished) {
-        pyBridge.textSearchFinished.connect(function(title) {
-            showToast("Добавлено: " + title, false);
-            hideBusyOverlay("textSearch");
-            if (pyBridge.getLibraryJson) pyBridge.getLibraryJson();
-        });
-    }
-
-    if (pyBridge.textSearchFailed) {
-        pyBridge.textSearchFailed.connect(function(msg) {
-            showToast(msg, true);
-            hideBusyOverlay("textSearch");
         });
     }
 
@@ -702,8 +637,6 @@ function onFilePicked(path, kind) {
         document.getElementById("edit-cover-preview").src = "file:///" + path.replace(/\\/g, "/");
     } else if (kind === "video_bg") {
         document.getElementById("settings-video-path").value = path;
-    } else if (kind === "ocr_image") {
-        document.getElementById("ocr-image-path").value = path;
     } else if (kind === "shazam_audio") {
         setShazamLock(true);
         setShazamStatus("Распознаю файл…");
@@ -790,35 +723,26 @@ function renderLibrary(json) {
         list.innerHTML = "<p style='font-size:12px;color:#9a86a4;padding:8px'>Ничего не найдено</p>";
         return;
     }
+    // Сейчас играющий трек — отдельно сверху, над остальными (легче найти,
+    // не нужно скроллить список, чтобы увидеть, что сейчас включено).
+    var playingIdx = -1;
+    if (currentPlayingSongId) {
+        for (var i = 0; i < sortedSongs.length; i++) {
+            if (sortedSongs[i].id === currentPlayingSongId) { playingIdx = i; break; }
+        }
+    }
+    if (playingIdx !== -1) {
+        var playingSong = sortedSongs.splice(playingIdx, 1)[0];
+        list.appendChild(_buildSongRow(playingSong, true));
+        if (sortedSongs.length) {
+            var divider = document.createElement("div");
+            divider.className = "song-list-divider";
+            divider.innerText = "Все треки";
+            list.appendChild(divider);
+        }
+    }
     sortedSongs.forEach(function(s) {
-        const row = document.createElement("div");
-        row.className = "song-item song-row-clickable";
-        const cover = s.cover || "../assets/default_cover.png";
-        row.innerHTML =
-            "<img src='" + cover + "' alt=''>" +
-            "<div class='song-item-info'>" +
-            "<div class='song-item-title'>" + escapeHtml(s.title_raw || s.title) + "</div>" +
-            "<div class='song-item-artist'>" + escapeHtml(s.artist_raw || s.artist) + "</div>" +
-            (s.playlists && s.playlists.length ?
-                "<div class='song-item-playlists'>&#9834; " + escapeHtml(s.playlists.join(", ")) + "</div>" : "") +
-            "</div>" +
-            "<div class='song-item-actions'>" +
-            "<button type='button' class='icon-btn' data-playlist='" + s.id + "' title='Добавить в плейлист'>" + ICONS.playlistAdd + "</button>" +
-            "<button type='button' class='icon-btn' data-edit='" + s.id + "' title='Изменить название, автора, обложку, текст'>" + ICONS.edit + "</button>" +
-            "<button type='button' class='icon-btn' data-instr='" + s.id + "' title='Найти инструментал на YouTube'>" + ICONS.music + "</button>" +
-            (!s.has_lyrics ?
-                "<button type='button' class='icon-btn' data-find-lyrics='" + s.id + "' title='Найти текст песни'>" + ICONS.lyricsSearch + "</button>" : "") +
-            "<button type='button' class='icon-btn' data-trim='" + s.id + "' title='Обрезать начало/конец'>" + ICONS.scissors + "</button>" +
-            "<button type='button' class='icon-btn icon-btn-danger' data-del='" + s.id + "' title='Удалить трек'>" + ICONS.trash + "</button>" +
-            "</div>";
-        row.title = "Нажми, чтобы включить";
-        row.onclick = function() {
-            selectedSongId = s.id;
-            pyBridge.playSongById(s.id);
-            isPlaying = true;
-            setPlayIcon(true);
-        };
-        list.appendChild(row);
+        list.appendChild(_buildSongRow(s, false));
     });
     list.querySelectorAll("[data-playlist]").forEach(function(btn) {
         btn.onclick = function(e) { e.stopPropagation(); openPlaylistModal(parseInt(btn.getAttribute("data-playlist"))); };
@@ -850,6 +774,37 @@ function renderLibrary(json) {
     list.querySelectorAll("[data-trim]").forEach(function(btn) {
         btn.onclick = function(e) { e.stopPropagation(); openTrimModal(parseInt(btn.getAttribute("data-trim"))); };
     });
+}
+
+function _buildSongRow(s, isPlaying) {
+    const row = document.createElement("div");
+    row.className = "song-item song-row-clickable" + (isPlaying ? " song-item-playing" : "");
+    const cover = s.cover || "../assets/default_cover.png";
+    row.innerHTML =
+        "<img src='" + cover + "' alt=''>" +
+        "<div class='song-item-info'>" +
+        "<div class='song-item-title'>" + escapeHtml(s.title_raw || s.title) + "</div>" +
+        "<div class='song-item-artist'>" + escapeHtml(s.artist_raw || s.artist) + "</div>" +
+        (s.playlists && s.playlists.length ?
+            "<div class='song-item-playlists'>&#9834; " + escapeHtml(s.playlists.join(", ")) + "</div>" : "") +
+        "</div>" +
+        "<div class='song-item-actions'>" +
+        "<button type='button' class='icon-btn' data-playlist='" + s.id + "' title='Добавить в плейлист'>" + ICONS.playlistAdd + "</button>" +
+        "<button type='button' class='icon-btn' data-edit='" + s.id + "' title='Изменить название, автора, обложку, текст'>" + ICONS.edit + "</button>" +
+        "<button type='button' class='icon-btn' data-instr='" + s.id + "' title='Найти инструментал на YouTube'>" + ICONS.music + "</button>" +
+        (!s.has_lyrics ?
+            "<button type='button' class='icon-btn' data-find-lyrics='" + s.id + "' title='Найти текст песни'>" + ICONS.lyricsSearch + "</button>" : "") +
+        "<button type='button' class='icon-btn' data-trim='" + s.id + "' title='Обрезать начало/конец'>" + ICONS.scissors + "</button>" +
+        "<button type='button' class='icon-btn icon-btn-danger' data-del='" + s.id + "' title='Удалить трек'>" + ICONS.trash + "</button>" +
+        "</div>";
+    row.title = "Нажми, чтобы включить";
+    row.onclick = function() {
+        selectedSongId = s.id;
+        pyBridge.playSongById(s.id);
+        isPlaying = true;
+        setPlayIcon(true);
+    };
+    return row;
 }
 
 /* === Триграммы: нечёткий поиск (опечатки, неполные слова, другой порядок) ===
@@ -892,7 +847,8 @@ function renderPlaylists() {
             "<span>" +
             "<button type='button' data-playpl='" + p.id + "' title='Воспроизвести'>&#9654;</button> " +
             "<button type='button' data-renamepl='" + p.id + "' title='Переименовать'>&#9998;</button> " +
-            "<button type='button' data-delpl='" + p.id + "' title='Удалить'>&times;</button>" +
+            (p.is_default ? "" :
+                "<button type='button' data-delpl='" + p.id + "' title='Удалить'>&times;</button>") +
             "</span>";
         list.appendChild(row);
     });
@@ -1136,8 +1092,8 @@ function setKaraokeLyrics(lrcText) {
     var btn = document.getElementById("btn-karaoke-panel");
     var available = currentSyncedLines.length > 0;
     if (btn) {
-        btn.disabled = !available;
-        btn.title = available ? "Подсветка текста в такт песне" : "Для этой песни нет текста с таймкодами";
+        btn.classList.toggle("hidden", !available);
+        btn.title = "Подсветка текста в такт песне";
     }
     if (!available && karaokeModeOn) {
         karaokeModeOn = false;
@@ -1597,7 +1553,7 @@ function _renderOnlineSearchResults(data) {
         box.innerHTML = "<p style='font-size:12px;color:#9a86a4'>Ничего не найдено</p>";
         return;
     }
-    function section(title, items, onImport, subFn, previewUrlFn) {
+    function section(title, items, onImport, subFn) {
         if (!items.length) return;
         var h = document.createElement("div");
         h.className = "online-search-group-title";
@@ -1611,13 +1567,9 @@ function _renderOnlineSearchResults(data) {
                 "<div class='online-search-row-main'><div class='online-search-row-info'>" + escapeHtml(item.title || "") + "</div>" +
                 "<div class='online-search-row-sub'>" + escapeHtml(subFn(item)) + "</div></div>" +
                 "<div class='online-search-row-actions'>" +
-                "<button type='button' class='btn-modal btn-ghost' data-preview>&#9654; Прослушать</button>" +
                 "<button type='button' class='btn-modal btn-secondary' data-add>Скачать</button>" +
                 "</div></div>";
             row.querySelector("[data-add]").onclick = function() { onImport(item); };
-            row.querySelector("[data-preview]").onclick = function(e) {
-                _toggleOnlineSearchPreview(row, e.currentTarget, previewUrlFn(item));
-            };
             box.appendChild(row);
         });
     }
@@ -1625,36 +1577,12 @@ function _renderOnlineSearchResults(data) {
         pyBridge.importFromYoutube(item.url, "", "", driveLoggedIn);
         closeOnlineSearchModal();
         showToast("Скачиваю: " + item.title, false);
-    }, function(item) { return (item.channel || "") + " · " + formatDuration(item.duration); },
-    function(item) { return "https://www.youtube.com/embed/" + item.id + "?autoplay=1"; });
+    }, function(item) { return (item.channel || "") + " · " + formatDuration(item.duration); });
     section("Spotify", spotify, function(item) {
         pyBridge.importFromSpotify(item.url, "", "", driveLoggedIn);
         closeOnlineSearchModal();
         showToast("Скачиваю: " + item.title, false);
-    }, function(item) { return item.artist || ""; },
-    function(item) { return "https://open.spotify.com/embed/track/" + item.id + "?autoplay=1"; });
-}
-
-function _toggleOnlineSearchPreview(row, btn, embedUrl) {
-    var existing = row.querySelector(".online-search-preview-frame");
-    if (existing) {
-        existing.remove();
-        btn.innerHTML = "&#9654; Прослушать";
-        return;
-    }
-    // Закрываем другие открытые превью — чтобы не играло несколько сразу
-    document.querySelectorAll(".online-search-preview-frame").forEach(function(f) {
-        var ownerBtn = f.parentElement && f.parentElement.querySelector("[data-preview]");
-        f.remove();
-        if (ownerBtn) ownerBtn.innerHTML = "&#9654; Прослушать";
-    });
-    var frame = document.createElement("iframe");
-    frame.className = "online-search-preview-frame";
-    frame.src = embedUrl;
-    frame.allow = "autoplay; encrypted-media";
-    frame.style.height = embedUrl.indexOf("spotify.com") !== -1 ? "80px" : "190px";
-    row.appendChild(frame);
-    btn.innerHTML = "&#9632; Стоп";
+    }, function(item) { return item.artist || ""; });
 }
 
 /* === YouTube channel/playlist bulk import === */
@@ -1728,7 +1656,6 @@ function openTikTokCollectionModal() {
     document.getElementById("tiktok-collection-modal").style.display = "flex";
     if (!tiktokCollectionRunning) {
         document.getElementById("tiktok-collection-log").innerText = "";
-        document.getElementById("tiktok-collection-candidates").innerHTML = "";
         setTikTokCollectionStatus("");
     }
 }
@@ -1746,43 +1673,9 @@ function startTikTokCollectionImport() {
         return;
     }
     document.getElementById("tiktok-collection-log").innerText = "";
-    document.getElementById("tiktok-collection-candidates").innerHTML = "";
     appendTikTokCollectionLog("Читаю список видео…");
     setTikTokCollectionLock(true);
     pyBridge.importTikTokCollection(url);
-}
-
-function _appendTikTokCandidate(payload) {
-    var box = document.getElementById("tiktok-collection-candidates");
-    if (!box) return;
-    var wrapper = document.createElement("div");
-    var header = document.createElement("div");
-    header.className = "online-search-group-title";
-    header.innerText = "Из видео «" + payload.video_label + "»: распознано " + payload.artist + " — " + payload.title;
-    wrapper.appendChild(header);
-    (payload.results || []).forEach(function(item) {
-        var row = document.createElement("div");
-        row.className = "online-search-row";
-        row.innerHTML =
-            "<div class='online-search-row-top'>" +
-            "<div class='online-search-row-main'><div class='online-search-row-info'>" + escapeHtml(item.title || "") + "</div>" +
-            "<div class='online-search-row-sub'>" + escapeHtml((item.channel || "") + " · " + formatDuration(item.duration)) + "</div></div>" +
-            "<div class='online-search-row-actions'>" +
-            "<button type='button' class='btn-modal btn-ghost' data-preview>&#9654; Прослушать</button>" +
-            "<button type='button' class='btn-modal btn-secondary' data-add>Скачать</button>" +
-            "</div></div>";
-        row.querySelector("[data-preview]").onclick = function(e) {
-            _toggleOnlineSearchPreview(row, e.currentTarget, "https://www.youtube.com/embed/" + item.id + "?autoplay=1");
-        };
-        row.querySelector("[data-add]").onclick = function() {
-            if (!pyBridge || !pyBridge.downloadTikTokCandidate) return;
-            pyBridge.downloadTikTokCandidate(item.url, payload.playlist_id || 0, driveLoggedIn);
-            // Остальные варианты для этой же песни больше не нужны — трек уже скачивается.
-            wrapper.remove();
-        };
-        wrapper.appendChild(row);
-    });
-    box.appendChild(wrapper);
 }
 
 function stopTikTokCollectionImport() {
@@ -1875,69 +1768,6 @@ function startShazamListen() {
     setShazamLock(true);
     _runShazamCountdown(seconds, source === "loopback" ? "Слушаю звук компьютера" : "Слушаю микрофон");
     pyBridge.startShazamListen(seconds, source);
-}
-
-/* === OCR: recognize song name from an image === */
-
-function openOcrModal() {
-    document.getElementById("add-menu").classList.add("hidden");
-    document.getElementById("ocr-image-path").value = "";
-    document.getElementById("ocr-results").innerHTML = "";
-    setOcrStatus("");
-    document.getElementById("ocr-modal").style.display = "flex";
-}
-
-function closeOcrModal() {
-    document.getElementById("ocr-modal").style.display = "none";
-}
-
-function setOcrStatus(text, isError, isOk) {
-    var el = document.getElementById("ocr-status");
-    if (!el) return;
-    el.innerText = text || "";
-    el.className = "import-status" + (isError ? " error" : isOk ? " ok" : "");
-}
-
-function submitOcr() {
-    const path = document.getElementById("ocr-image-path").value.trim();
-    if (!path) {
-        setOcrStatus("Сначала выбери картинку", true);
-        return;
-    }
-    const lang = document.getElementById("ocr-lang").value;
-    document.getElementById("ocr-results").innerHTML = "";
-    setOcrStatus("Распознаю…");
-    document.getElementById("btn-ocr-run").disabled = true;
-    showBusyOverlay("ocr", "Распознаю текст на картинке…");
-    pyBridge.recognizeImageText(path, lang);
-}
-
-function renderOcrResults(items) {
-    var list = document.getElementById("ocr-results");
-    list.innerHTML = "";
-    if (!items.length) {
-        list.innerHTML = "<p style='font-size:12px;color:#9a86a4'>Текст не распознан.</p>";
-        return;
-    }
-    items.forEach(function(item) {
-        // Поддержка и старого формата (просто строки), и нового ({text, is_line}).
-        var text = (typeof item === "string") ? item : item.text;
-        var isLine = (typeof item === "string") ? true : item.is_line;
-        var row = document.createElement("div");
-        row.className = "duplicate-row" + (isLine ? "" : " ocr-candidate-row");
-        var span = document.createElement("span");
-        span.innerText = text;
-        var btn = document.createElement("button");
-        btn.type = "button";
-        btn.innerText = "Скачать";
-        btn.onclick = function() {
-            btn.disabled = true;
-            pyBridge.downloadFromText(text);
-        };
-        row.appendChild(span);
-        row.appendChild(btn);
-        list.appendChild(row);
-    });
 }
 
 /* === Инструментал: подтверждение перед скачиванием === */

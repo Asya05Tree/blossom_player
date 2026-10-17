@@ -12,7 +12,6 @@ Pillow
 spotapi>=1.2.8  # 1.2.7 и ниже тянут tls-client — его DLL несколько раз падала нативно
                 # на Windows (0xc0000005 в tls-client-64.dll). 1.2.8+ использует только
                 # curl_cffi для TLS-фингерпринта, tls-client больше не нужен и не ставится.
-easyocr
 requests
 beautifulsoup4
 sounddevice

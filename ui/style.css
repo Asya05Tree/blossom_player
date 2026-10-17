@@ -208,6 +208,19 @@ body {
     align-items: center;
 }
 
+.song-item-playing {
+    background: rgba(179, 157, 219, 0.35);
+    border: 1px solid #b39ddb;
+}
+
+.song-list-divider {
+    font-size: 10px;
+    color: #9a86a4;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 2px 4px;
+}
+
 .song-item img {
     width: 44px;
     height: 44px;
@@ -1268,11 +1281,6 @@ body.ui-locked .progress-bar-container {
     margin-top: 6px;
 }
 
-.ocr-candidate-row {
-    padding-left: 16px;
-    color: #9a86a4;
-    font-style: italic;
-}
 
 .pv-song-row {
     display: flex;

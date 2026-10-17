@@ -1,8 +1,8 @@
 """Сканирование коллекции видео TikTok: каждое видео прослушивается Shazam'ом
 в нескольких точках (в одном ролике может быть смонтировано несколько треков
-подряд). Сам воркер НИЧЕГО не скачивает — только находит кандидатов и
-предлагает их пользователю на подтверждение (прослушать/скачать/пропустить),
-потому что распознавание по 12-секундному отрывку может ошибаться."""
+подряд). Для каждой распознанной песни сразу скачивается первый найденный
+на YouTube результат — без промежуточного выбора пользователем, потому что
+коллекции могут быть большими и ждать подтверждения на каждый трек неудобно."""
 import os
 import uuid
 
@@ -24,6 +24,7 @@ from .tiktok_downloader import (
 from .youtube_downloader import search_youtube_results
 from .youtube_import_pipeline import import_youtube_track_safe
 
+TIKTOK_PLAYLIST_NAME = "TikTok"
 COLLECTION_VIDEO_LIMIT = 30
 # Видео дольше этого считаются компиляциями/стримами, а не отдельными
 # роликами с одной-двумя песнями — пользователь попросил не тратить время
@@ -31,16 +32,15 @@ COLLECTION_VIDEO_LIMIT = 30
 MAX_VIDEO_DURATION_SECONDS = 5 * 60
 PROBE_CLIP_SECONDS = 12
 PROBE_OFFSET_RATIOS = (0.1, 0.45, 0.8)
-CANDIDATE_RESULTS_LIMIT = 4
 
 
 class TikTokCollectionWorker(QThread):
     """Сканирует все видео коллекции/профиля TikTok (до COLLECTION_VIDEO_LIMIT
-    штук) и для каждой распознанной Shazam'ом песни эмитит candidate_found —
-    само скачивание происходит отдельно, только после подтверждения пользователем."""
+    штук) и для каждой распознанной Shazam'ом песни сразу скачивает первый
+    найденный на YouTube результат в общий плейлист «TikTok»."""
 
     progress = pyqtSignal(str)
-    candidate_found = pyqtSignal(dict)
+    track_imported = pyqtSignal()
     finished_ok = pyqtSignal(dict)
     finished_err = pyqtSignal(dict)
 
@@ -73,11 +73,11 @@ class TikTokCollectionWorker(QThread):
         listing = list_tiktok_collection_videos(self.url, limit=COLLECTION_VIDEO_LIMIT)
         videos = listing["videos"]
         if not videos:
-            return {"identified": 0, "skipped": 0, "failed": 0, "total": 0}
+            return {"downloaded": 0, "skipped": 0, "failed": 0, "total": 0}
 
-        playlist_id = self._ensure_playlist(f"TikTok: {listing['source_title']}")
+        playlist_id = self._ensure_playlist()
 
-        identified = skipped = failed = 0
+        downloaded = skipped = failed = 0
         total = len(videos)
         self.progress.emit(f"Найдено видео: {total} (за раз максимум {COLLECTION_VIDEO_LIMIT})")
         log_to_file("tiktok_collection", f"Старт: «{listing['source_title']}», видео {total}")
@@ -97,24 +97,24 @@ class TikTokCollectionWorker(QThread):
 
             self.progress.emit(f"[{done}/{total}] Скачиваю видео для распознавания: {label}")
             try:
-                downloaded = download_tiktok_video_audio(video["url"])
+                video_file = download_tiktok_video_audio(video["url"])
             except Exception as exc:
                 log_to_file("tiktok_collection", f"[{done}/{total}] скачивание не удалось {label}: {exc}")
                 failed += 1
                 continue
 
-            real_duration = downloaded.get("duration") or duration
+            real_duration = video_file.get("duration") or duration
             if real_duration and real_duration > MAX_VIDEO_DURATION_SECONDS:
                 skipped += 1
                 self.progress.emit(
                     f"[{done}/{total}] Пропускаю (видео {int(real_duration) // 60} мин — слишком длинное): {label}"
                 )
-                self._cleanup(downloaded["filepath"])
+                self._cleanup(video_file["filepath"])
                 continue
 
             self.progress.emit(f"[{done}/{total}] Распознаю музыку в видео…")
-            found_songs = self._identify_songs(downloaded["filepath"], real_duration)
-            self._cleanup(downloaded["filepath"])
+            found_songs = self._identify_songs(video_file["filepath"], real_duration)
+            self._cleanup(video_file["filepath"])
 
             if not found_songs:
                 self.progress.emit(f"[{done}/{total}] Не удалось распознать музыку: {label}")
@@ -125,9 +125,9 @@ class TikTokCollectionWorker(QThread):
                 if self._stop_requested:
                     break
                 query = f"{artist} {title}".strip()
-                self.progress.emit(f"[{done}/{total}] Распознано «{title}» — {artist}. Ищу варианты…")
+                self.progress.emit(f"[{done}/{total}] Распознано «{title}» — {artist}. Скачиваю…")
                 try:
-                    results = search_youtube_results(query, limit=CANDIDATE_RESULTS_LIMIT)
+                    results = search_youtube_results(query, limit=1)
                 except Exception as exc:
                     log_to_file("tiktok_collection", f"поиск не удался для «{title}» — {artist}: {exc}")
                     failed += 1
@@ -135,23 +135,34 @@ class TikTokCollectionWorker(QThread):
                 if not results:
                     failed += 1
                     continue
-                identified += 1
-                self.candidate_found.emit({
-                    "video_label": label,
-                    "title": title,
-                    "artist": artist,
-                    "playlist_id": playlist_id,
-                    "results": results,
-                })
+
+                result = import_youtube_track_safe(
+                    results[0]["url"],
+                    self.drive,
+                    title_override=title,
+                    artist_override=artist,
+                    upload_to_drive=self.upload_to_drive,
+                    progress_callback=lambda msg: self.progress.emit(f"[{done}/{total}] {msg}"),
+                )
+                if not result.get("ok"):
+                    log_to_file("tiktok_collection", f"скачивание не удалось для «{title}» — {artist}: {result.get('error')}")
+                    failed += 1
+                    continue
+
+                if result.get("song_id"):
+                    db.add_song_to_playlist(playlist_id, result["song_id"])
+                downloaded += 1
+                self.progress.emit(f"[{done}/{total}] Скачано: {artist} — {title}")
+                self.track_imported.emit()
 
         log_to_file(
             "tiktok_collection",
-            f"Готово: «{listing['source_title']}» — найдено кандидатов {identified}, "
+            f"Готово: «{listing['source_title']}» — скачано {downloaded}, "
             f"пропущено {skipped}, ошибок {failed}",
         )
 
         return {
-            "identified": identified,
+            "downloaded": downloaded,
             "skipped": skipped,
             "failed": failed,
             "total": total,
@@ -200,52 +211,14 @@ class TikTokCollectionWorker(QThread):
         except OSError:
             pass
 
-    def _ensure_playlist(self, name: str) -> int:
-        existing = db.get_playlist_by_name(name)
+    def _ensure_playlist(self) -> int:
+        existing = db.get_playlist_by_name(TIKTOK_PLAYLIST_NAME)
         if existing:
+            if not existing.is_default:
+                db.mark_playlist_default(existing.id)
             return existing.id
         try:
-            display = wrap_title(name)
+            display = wrap_title(TIKTOK_PLAYLIST_NAME)
         except Exception:
-            display = name
-        return db.add_playlist(Playlist(name=display))
-
-
-class TikTokCandidateDownloadWorker(QThread):
-    """Скачивает ОДНОГО подтверждённого пользователем кандидата (после
-    прослушивания в модалке) — независимо от потока сканирования коллекции."""
-
-    progress = pyqtSignal(str)
-    finished_ok = pyqtSignal(dict)
-    finished_err = pyqtSignal(dict)
-
-    def __init__(self, url: str, drive: BlossomDriveManager, playlist_id: int = 0, upload_to_drive: bool = False):
-        super().__init__()
-        self.url = (url or "").strip()
-        self.drive = drive
-        self.playlist_id = playlist_id
-        self.upload_to_drive = upload_to_drive
-
-    def run(self):
-        try:
-            result = import_youtube_track_safe(
-                self.url,
-                self.drive,
-                upload_to_drive=self.upload_to_drive,
-                progress_callback=lambda msg: self.progress.emit(msg),
-            )
-            if result.get("ok") and result.get("song_id") and self.playlist_id:
-                db.add_song_to_playlist(self.playlist_id, result["song_id"])
-            if result.get("ok"):
-                self.finished_ok.emit(result)
-            else:
-                self.finished_err.emit(result.get("error") or {})
-        except BlossomError as exc:
-            self.finished_err.emit(exc.to_dict())
-        except Exception as exc:
-            self.finished_err.emit({
-                "stage": "pipeline",
-                "code": "TIKTOK_CANDIDATE_DOWNLOAD_CRASH",
-                "message": "Ошибка скачивания выбранного трека",
-                "detail": str(exc),
-            })
+            display = TIKTOK_PLAYLIST_NAME
+        return db.add_playlist(Playlist(name=display, is_default=True))

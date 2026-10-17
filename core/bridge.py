@@ -15,13 +15,11 @@ from .spotify_library_worker import SpotifyLibraryWorker
 from .youtube_import_worker import YoutubeImportWorker
 from .artist_import_worker import ArtistImportWorker
 from .youtube_channel_worker import YoutubeChannelWorker
-from .tiktok_import_worker import TikTokCollectionWorker, TikTokCandidateDownloadWorker
+from .tiktok_import_worker import TikTokCollectionWorker
 from .instrumental_worker import InstrumentalSearchWorker, InstrumentalDownloadWorker
 from .duplicate_finder_worker import DuplicateFinderWorker
 from .blossom_error import BlossomError
 from .trim_util import trim_audio
-from .ocr_worker import OcrWorker
-from .text_search_worker import TextSearchDownloadWorker
 from .shazam_worker import ShazamWorker
 from .lyrics_worker import LyricsPreviewWorker, LyricsBulkWorker, ClearAllLyricsWorker, SyncedLyricsWorker, SingleLyricsSearchWorker
 from .online_search_worker import OnlineSearchWorker
@@ -68,9 +66,6 @@ class BlossomBridge(QObject):
     tiktokCollectionProgress = pyqtSignal(str)
     tiktokCollectionFinished = pyqtSignal(str)
     tiktokCollectionFailed = pyqtSignal(str)
-    tiktokCandidateFound = pyqtSignal(str)
-    tiktokCandidateDownloadReady = pyqtSignal(str)
-    tiktokCandidateDownloadFailed = pyqtSignal(str)
     instrumentalStarted = pyqtSignal(int)
     instrumentalProgress = pyqtSignal(str)
     instrumentalFound = pyqtSignal(str)
@@ -79,12 +74,6 @@ class BlossomBridge(QObject):
     duplicatesScanProgress = pyqtSignal(str)
     duplicatesScanFinished = pyqtSignal(str)
     duplicatesScanFailed = pyqtSignal(str)
-    ocrFinished = pyqtSignal(list)
-    ocrFailed = pyqtSignal(str)
-    textSearchStarted = pyqtSignal(str)
-    textSearchProgress = pyqtSignal(str)
-    textSearchFinished = pyqtSignal(str)
-    textSearchFailed = pyqtSignal(str)
     shazamStarted = pyqtSignal()
     shazamProgress = pyqtSignal(str)
     shazamFinished = pyqtSignal(str)
@@ -118,12 +107,9 @@ class BlossomBridge(QObject):
         self._artist_import_worker = None
         self._youtube_channel_worker = None
         self._tiktok_collection_worker = None
-        self._tiktok_candidate_worker = None
         self._instrumental_search_worker = None
         self._instrumental_download_worker = None
         self._duplicate_finder_worker = None
-        self._ocr_worker = None
-        self._text_search_worker = None
         self._shazam_worker = None
         self._lyrics_preview_worker = None
         self._single_lyrics_worker = None
@@ -155,9 +141,9 @@ class BlossomBridge(QObject):
     _JOB_WORKER_ATTRS = (
         "_drive_verify_worker", "_drive_login_worker", "_sync_worker", "_drive_upload_worker",
         "_import_worker", "_youtube_import_worker", "_artist_import_worker", "_youtube_channel_worker",
-        "_tiktok_collection_worker", "_tiktok_candidate_worker",
-        "_instrumental_search_worker", "_instrumental_download_worker", "_ocr_worker",
-        "_text_search_worker", "_shazam_worker", "_duplicate_finder_worker", "_spotify_library_worker",
+        "_tiktok_collection_worker",
+        "_instrumental_search_worker", "_instrumental_download_worker",
+        "_shazam_worker", "_duplicate_finder_worker", "_spotify_library_worker",
         "_lyrics_preview_worker", "_single_lyrics_worker", "_lyrics_bulk_worker", "_clear_all_lyrics_worker",
         "_synced_lyrics_worker", "_online_search_worker", "_spectrum_worker",
     )
@@ -165,7 +151,7 @@ class BlossomBridge(QObject):
     # Подмножество _JOB_WORKER_ATTRS, которое блокирует клики по библиотеке —
     # только "работа с текстами песен или загрузка" в точном смысле просьбы
     # пользователя. Лёгкие фоновые штуки (авто-поиск караоке-текста/спектра,
-    # OCR, поиск дублей — у них своя модалка со Stop) сюда не входят, иначе
+    # поиск дублей — у них своя модалка со Stop) сюда не входят, иначе
     # библиотека блокировалась бы почти постоянно без всякой пользы.
     # label — что показать пользователю; stoppable=True только если у воркера
     # есть request_stop() и его правда можно прервать без риска оставить
@@ -177,11 +163,9 @@ class BlossomBridge(QObject):
         "youtubeImport": ("_youtube_import_worker", "Скачивание трека с YouTube", False),
         "artistImport": ("_artist_import_worker", "Скачивание дискографии артиста", True),
         "youtubeChannel": ("_youtube_channel_worker", "Скачивание канала YouTube", True),
-        "tiktokCollection": ("_tiktok_collection_worker", "Распознавание песен в коллекции TikTok", True),
-        "tiktokCandidateDownload": ("_tiktok_candidate_worker", "Скачивание выбранного трека из TikTok", False),
+        "tiktokCollection": ("_tiktok_collection_worker", "Распознавание и скачивание песен из коллекции TikTok", True),
         "spotifyLibrary": ("_spotify_library_worker", "Спотифай автоматически", True),
         "instrumentalDownload": ("_instrumental_download_worker", "Скачивание инструментала", False),
-        "textSearch": ("_text_search_worker", "Скачивание найденного трека", False),
         "shazam": ("_shazam_worker", "Распознавание Shazam", False),
         "driveSync": ("_sync_worker", "Синхронизация с Google Drive", True),
         "driveUpload": ("_drive_upload_worker", "Загрузка в Google Drive", False),
@@ -460,10 +444,6 @@ class BlossomBridge(QObject):
             path, _ = QFileDialog.getOpenFileName(
                 parent, "Выбери видео для фона", "", "Video (*.webm *.mp4)",
             )
-        elif kind == "ocr_image":
-            path, _ = QFileDialog.getOpenFileName(
-                parent, "Выбери картинку", "", "Images (*.png *.jpg *.jpeg *.webp *.bmp)",
-            )
         elif kind == "shazam_audio":
             path, _ = QFileDialog.getOpenFileName(
                 parent, "Выбери аудио или видео с записью песни", "",
@@ -594,7 +574,7 @@ class BlossomBridge(QObject):
         self.toastMessage.emit("Плейлист создан", False)
 
     def _emit_playlists(self):
-        items = [{"id": p.id, "name": p.name} for p in db.get_all_playlists()]
+        items = [{"id": p.id, "name": p.name, "is_default": p.is_default} for p in db.get_all_playlists()]
         self.playlistListUpdated.emit(items)
 
     @pyqtSlot(int, int)
@@ -615,6 +595,8 @@ class BlossomBridge(QObject):
         if db.delete_playlist(playlist_id):
             self._emit_playlists()
             self.toastMessage.emit("Плейлист удалён", False)
+        else:
+            self.toastMessage.emit("Этот плейлист нельзя удалить — можно удалять только песни в нём", True)
 
     @pyqtSlot(int)
     def requestPlaylistSongs(self, playlist_id: int):
@@ -1076,7 +1058,7 @@ class BlossomBridge(QObject):
             upload_to_drive=bool(self.drive.service),
         )
         self._tiktok_collection_worker.progress.connect(self._on_tiktok_collection_progress)
-        self._tiktok_collection_worker.candidate_found.connect(self._on_tiktok_candidate_found)
+        self._tiktok_collection_worker.track_imported.connect(self._on_tiktok_track_imported)
         self._tiktok_collection_worker.finished_ok.connect(self._on_tiktok_collection_ok)
         self._tiktok_collection_worker.finished_err.connect(self._on_tiktok_collection_err)
         self._tiktok_collection_worker.start()
@@ -1085,8 +1067,9 @@ class BlossomBridge(QObject):
         self.tiktokCollectionProgress.emit(msg)
         self._set_heavy_job_detail("tiktokCollection", msg)
 
-    def _on_tiktok_candidate_found(self, payload: dict) -> None:
-        self.tiktokCandidateFound.emit(json.dumps(payload, ensure_ascii=False))
+    def _on_tiktok_track_imported(self) -> None:
+        self._emit_library()
+        self._emit_playlists()
 
     @pyqtSlot()
     def stopTikTokCollection(self):
@@ -1095,8 +1078,10 @@ class BlossomBridge(QObject):
             self.tiktokCollectionProgress.emit("Останавливаю после текущего видео…")
 
     def _on_tiktok_collection_ok(self, stats: dict):
+        self._reload_queue_keep()
+        self._update_ui_state()
         text = (
-            f"Найдено кандидатов для скачивания: {stats.get('identified', 0)} — выбери в списке ниже. "
+            f"Скачано треков: {stats.get('downloaded', 0)}. "
             f"Пропущено длинных {stats.get('skipped', 0)}, ошибок {stats.get('failed', 0)} "
             f"из {stats.get('total', 0)} видео"
         )
@@ -1113,35 +1098,6 @@ class BlossomBridge(QObject):
         if detail:
             text += f" — {detail[:300]}"
         self.tiktokCollectionFailed.emit(text)
-
-    @pyqtSlot(str, int, bool)
-    def downloadTikTokCandidate(self, url, playlist_id, upload_to_drive):
-        if self._tiktok_candidate_worker and self._tiktok_candidate_worker.isRunning():
-            self.tiktokCandidateDownloadFailed.emit("Скачивание уже выполняется — подожди")
-            return
-        self._tiktok_candidate_worker = TikTokCandidateDownloadWorker(
-            url=url,
-            drive=self.drive,
-            playlist_id=playlist_id,
-            upload_to_drive=bool(upload_to_drive),
-        )
-        self._tiktok_candidate_worker.finished_ok.connect(self._on_tiktok_candidate_download_ok)
-        self._tiktok_candidate_worker.finished_err.connect(self._on_tiktok_candidate_download_err)
-        self._tiktok_candidate_worker.start()
-
-    def _on_tiktok_candidate_download_ok(self, result: dict):
-        self._reload_queue_keep()
-        self._update_ui_state()
-        self._emit_library()
-        self._emit_playlists()
-        title = result.get("title_display") or result.get("title") or "track"
-        if result.get("duplicate"):
-            title = f"{title} (уже была в библиотеке)"
-        self.tiktokCandidateDownloadReady.emit(title)
-
-    def _on_tiktok_candidate_download_err(self, err: dict):
-        message = err.get("message", "Не удалось скачать трек")
-        self.tiktokCandidateDownloadFailed.emit(message)
 
     @pyqtSlot(int)
     def findInstrumental(self, song_id):
@@ -1210,51 +1166,6 @@ class BlossomBridge(QObject):
         self._reload_queue_keep(song_id)
         self._update_ui_state()
         self.toastMessage.emit(f"Обрезано. Новая длительность: {int(new_duration)} сек", False)
-
-    @pyqtSlot(str, str)
-    def recognizeImageText(self, image_path, lang):
-        if self._ocr_worker and self._ocr_worker.isRunning():
-            self.ocrFailed.emit("Распознавание уже выполняется")
-            return
-        self._ocr_worker = OcrWorker(image_path=image_path, lang=lang or "en")
-        self._ocr_worker.finished_ok.connect(self.ocrFinished.emit)
-        self._ocr_worker.finished_err.connect(self._on_ocr_err)
-        self._ocr_worker.start()
-
-    def _on_ocr_err(self, err: dict):
-        stage = err.get("stage", "pipeline")
-        code = err.get("code", "UNKNOWN")
-        message = err.get("message", "Не удалось распознать текст")
-        self.ocrFailed.emit(f"[{stage}:{code}] {message}")
-
-    @pyqtSlot(str)
-    def downloadFromText(self, query):
-        if self._text_search_worker and self._text_search_worker.isRunning():
-            self.textSearchFailed.emit("Поиск уже выполняется")
-            return
-        self.textSearchStarted.emit(query)
-        self._text_search_worker = TextSearchDownloadWorker(
-            query=query,
-            drive=self.drive,
-            upload_to_drive=bool(self.drive.service),
-        )
-        self._text_search_worker.progress.connect(self.textSearchProgress.emit)
-        self._text_search_worker.finished_ok.connect(self._on_text_search_ok)
-        self._text_search_worker.finished_err.connect(self._on_text_search_err)
-        self._text_search_worker.start()
-
-    def _on_text_search_ok(self, payload):
-        self._emit_library()
-        title = payload.get("title_display") or payload.get("title") or "track"
-        if payload.get("duplicate"):
-            title = f"{title} (уже была в библиотеке)"
-        self.textSearchFinished.emit(title)
-
-    def _on_text_search_err(self, err: dict):
-        stage = err.get("stage", "pipeline")
-        code = err.get("code", "UNKNOWN")
-        message = err.get("message", "Не удалось скачать")
-        self.textSearchFailed.emit(f"[{stage}:{code}] {message}")
 
     @pyqtSlot(str)
     def searchOnline(self, query):

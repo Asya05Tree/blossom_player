@@ -100,7 +100,7 @@
                 <input type="range" class="slider" id="volume-slider" min="0" max="100" value="20" oninput="setVolume(this.value)">
             </div>
             <button id="btn-lyrics-panel" class="btn btn-panel" onclick="toggleSidePanel()" title="У этого трека пока нет текста" disabled>Текст и фон</button>
-            <button id="btn-karaoke-panel" class="btn btn-panel" onclick="toggleKaraokeMode()" title="Для этой песни нет текста с таймкодами" disabled>Караоке</button>
+            <button id="btn-karaoke-panel" class="btn btn-panel hidden" onclick="toggleKaraokeMode()" title="Подсветка текста в такт песне">Караоке</button>
             <button class="btn btn-panel" onclick="openSettingsModal()">Настройки</button>
         </div>
     </div>
@@ -133,7 +133,6 @@
         <button type="button" onclick="openArtistModal()">Дискография артиста</button>
         <button type="button" onclick="openYoutubeChannelModal()">Канал YouTube целиком</button>
         <button type="button" onclick="openTikTokCollectionModal()">Коллекция видео TikTok</button>
-        <button type="button" onclick="openOcrModal()">Распознать с картинки</button>
         <button type="button" onclick="openShazamModal()">Shazam: узнать трек</button>
         </div>
     </div>
@@ -262,14 +261,13 @@
             <h3 class="modal-title">Коллекция видео TikTok</h3>
             <p style="font-size:12px;color:#9a86a4;margin:0">
                 Вставь ссылку на профиль/коллекцию видео TikTok. Каждое видео (до 5 минут)
-                прослушивается Shazam'ом — найденные песни появятся ниже списком, где можно
-                прослушать перед скачиванием и скачать только нужные. Видео дольше 5 минут
-                пропускаются — это не песни, а компиляции/стримы.
+                прослушивается Shazam'ом, а для каждой распознанной песни сразу скачивается
+                первый найденный на YouTube результат — всё попадает в плейлист «TikTok».
+                Видео дольше 5 минут пропускаются — это не песни, а компиляции/стримы.
             </p>
             <input type="text" id="tiktok-collection-url" class="cozy-input" placeholder="Ссылка на профиль или коллекцию TikTok">
             <div id="tiktok-collection-log" class="spotify-auto-log"></div>
             <p id="tiktok-collection-status" class="import-status"></p>
-            <div id="tiktok-collection-candidates" class="online-search-results"></div>
             <div class="modal-actions">
                 <button type="button" id="btn-tiktok-collection-start" class="btn-modal btn-primary" onclick="startTikTokCollectionImport()">Сканировать</button>
                 <button type="button" id="btn-tiktok-collection-stop" class="btn-modal btn-ghost" onclick="stopTikTokCollectionImport()" disabled>Остановить</button>
@@ -298,33 +296,6 @@
                 <button type="button" id="btn-shazam-listen" class="btn-modal btn-primary" onclick="startShazamListen()">Слушать</button>
                 <button type="button" id="btn-shazam-file" class="btn-modal btn-secondary" onclick="pickFile('shazam_audio')">Выбрать файл</button>
                 <button type="button" class="btn-modal btn-ghost" onclick="closeShazamModal()">Закрыть</button>
-            </div>
-        </div>
-    </div>
-
-    <div id="ocr-modal" class="modal-overlay" style="display: none;">
-        <div class="modal-card modal-card-wide">
-            <h3 class="modal-title">Распознать название с картинки</h3>
-            <p style="font-size:12px;color:#9a86a4;margin:0">
-                Подойдёт скриншот плейлиста, фото обложки с названием и т.п.
-                Выбери язык текста на картинке для лучшего распознавания.
-            </p>
-            <div class="file-row">
-                <input type="text" id="ocr-image-path" class="cozy-input" readonly placeholder="Картинка не выбрана">
-                <button type="button" class="btn-modal btn-secondary" onclick="pickFile('ocr_image')">Выбрать картинку</button>
-            </div>
-            <select id="ocr-lang" class="cozy-input">
-                <option value="en">Английский / другой латинский</option>
-                <option value="ru">Русский</option>
-                <option value="ko">Корейский</option>
-                <option value="ja">Японский</option>
-                <option value="ch">Китайский</option>
-            </select>
-            <p id="ocr-status" class="import-status"></p>
-            <div id="ocr-results" class="spotify-auto-log"></div>
-            <div class="modal-actions">
-                <button type="button" id="btn-ocr-run" class="btn-modal btn-primary" onclick="submitOcr()">Распознать</button>
-                <button type="button" class="btn-modal btn-ghost" onclick="closeOcrModal()">Закрыть</button>
             </div>
         </div>
     </div>

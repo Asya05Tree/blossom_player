@@ -79,9 +79,17 @@ def init_db():
         CREATE TABLE IF NOT EXISTS playlists (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
-            cover_path TEXT
+            cover_path TEXT,
+            is_default INTEGER DEFAULT 0
         )
     ''')
+    try:
+        # Служебные плейлисты (Инструменталы, TikTok) — создаются автоматически
+        # и не должны пропадать по случайному клику "удалить плейлист", удалять
+        # можно только песни внутри них.
+        cursor.execute("ALTER TABLE playlists ADD COLUMN is_default INTEGER DEFAULT 0")
+    except Exception:
+        pass
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS playlist_songs (
             playlist_id INTEGER,
@@ -273,12 +281,22 @@ def get_all_songs() -> List[Song]:
 def add_playlist(playlist: Playlist) -> int:
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute('INSERT INTO playlists (name, cover_path) VALUES (?, ?)', 
-                   (playlist.name, playlist.cover_path))
+    cursor.execute('INSERT INTO playlists (name, cover_path, is_default) VALUES (?, ?, ?)',
+                   (playlist.name, playlist.cover_path, int(playlist.is_default)))
     conn.commit()
     playlist_id = cursor.lastrowid
     conn.close()
     return playlist_id
+
+
+def mark_playlist_default(playlist_id: int) -> None:
+    """Проставляет is_default=1 задним числом — для случая, когда служебный
+    плейлист (Инструменталы/TikTok) был создан до появления этого флага."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute('UPDATE playlists SET is_default = 1 WHERE id = ? AND is_default != 1', (playlist_id,))
+    conn.commit()
+    conn.close()
 
 def add_song_to_playlist(playlist_id: int, song_id: int):
     conn = get_connection()
@@ -339,10 +357,10 @@ def delete_song(song_id: int) -> bool:
 def get_all_playlists() -> List[Playlist]:
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute('SELECT id, name, cover_path FROM playlists')
+    cursor.execute('SELECT id, name, cover_path, is_default FROM playlists')
     rows = cursor.fetchall()
     conn.close()
-    return [Playlist(id=r[0], name=r[1], cover_path=r[2]) for r in rows]
+    return [Playlist(id=r[0], name=r[1], cover_path=r[2], is_default=bool(r[3])) for r in rows]
 
 
 def get_playlist_songs(playlist_id: int) -> List[Song]:
@@ -419,6 +437,14 @@ def rename_playlist(playlist_id: int, new_name: str) -> bool:
 def delete_playlist(playlist_id: int) -> bool:
     conn = get_connection()
     cursor = conn.cursor()
+    cursor.execute('SELECT is_default FROM playlists WHERE id = ?', (playlist_id,))
+    row = cursor.fetchone()
+    if row is None:
+        conn.close()
+        return False
+    if bool(row[0]):
+        conn.close()
+        return False
     cursor.execute('DELETE FROM playlist_songs WHERE playlist_id = ?', (playlist_id,))
     cursor.execute('DELETE FROM playlists WHERE id = ?', (playlist_id,))
     conn.commit()

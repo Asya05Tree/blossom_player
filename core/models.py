@@ -34,3 +34,4 @@ class Playlist:
     name: str = ""                  # Название (с декоративными символами)
     cover_path: Optional[str] = None # Картинка плейлиста
     song_ids: List[int] = field(default_factory=list) # Список ID песен в плейлисте
+    is_default: bool = False        # Служебный плейлист (Инструменталы, TikTok) — его саму нельзя удалить

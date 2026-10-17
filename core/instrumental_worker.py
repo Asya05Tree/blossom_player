@@ -124,9 +124,11 @@ class InstrumentalDownloadWorker(QThread):
     def _ensure_instrumental_playlist(self) -> int:
         existing = db.get_playlist_by_name(INSTRUMENTAL_PLAYLIST_NAME)
         if existing:
+            if not existing.is_default:
+                db.mark_playlist_default(existing.id)
             return existing.id
         try:
             display = wrap_title(INSTRUMENTAL_PLAYLIST_NAME)
         except Exception:
             display = INSTRUMENTAL_PLAYLIST_NAME
-        return db.add_playlist(Playlist(name=display))
+        return db.add_playlist(Playlist(name=display, is_default=True))
