@@ -218,9 +218,12 @@ function wireBridgeSignals() {
 
     if (pyBridge.spotifyAutoProgress) {
         pyBridge.spotifyAutoProgress.connect(function(msg) {
+            // Намеренно без showBusyOverlay: у этого импорта своя модалка со
+            // статусом/логом и рабочей кнопкой "Остановить" — полноэкранный
+            // busy-overlay (z-index выше модалки) лежал поверх неё и физически
+            // перекрывал клик по "Остановить", так что он не работал.
             appendSpotifyAutoLog(msg);
             setSpotifyAutoStatus(msg, false);
-            showBusyOverlay("spotifyAuto", msg);
         });
     }
 
@@ -229,7 +232,6 @@ function wireBridgeSignals() {
             appendSpotifyAutoLog(msg);
             setSpotifyAutoStatus(msg, false, true);
             setSpotifyAutoLock(false);
-            hideBusyOverlay("spotifyAuto");
             if (pyBridge.getLibraryJson) pyBridge.getLibraryJson();
         });
     }
@@ -239,7 +241,6 @@ function wireBridgeSignals() {
             appendSpotifyAutoLog(msg);
             setSpotifyAutoStatus(msg, true);
             setSpotifyAutoLock(false);
-            hideBusyOverlay("spotifyAuto");
         });
     }
 
@@ -277,9 +278,10 @@ function wireBridgeSignals() {
 
     if (pyBridge.artistImportProgress) {
         pyBridge.artistImportProgress.connect(function(msg) {
+            // Без showBusyOverlay — та же причина, что у spotifyAuto выше:
+            // у этой модалки своя кнопка "Остановить", оверлей её перекрывал.
             appendArtistImportLog(msg);
             setArtistImportStatus(msg, false);
-            showBusyOverlay("artistImport", msg);
         });
     }
 
@@ -288,7 +290,6 @@ function wireBridgeSignals() {
             appendArtistImportLog(msg);
             setArtistImportStatus(msg, false, true);
             setArtistImportLock(false);
-            hideBusyOverlay("artistImport");
             if (pyBridge.getLibraryJson) pyBridge.getLibraryJson();
         });
     }
@@ -298,15 +299,15 @@ function wireBridgeSignals() {
             appendArtistImportLog(msg);
             setArtistImportStatus(msg, true);
             setArtistImportLock(false);
-            hideBusyOverlay("artistImport");
         });
     }
 
     if (pyBridge.youtubeChannelProgress) {
         pyBridge.youtubeChannelProgress.connect(function(msg) {
+            // Без showBusyOverlay — та же причина: своя кнопка "Остановить",
+            // оверлей её перекрывал.
             appendYoutubeChannelLog(msg);
             setYoutubeChannelStatus(msg, false);
-            showBusyOverlay("youtubeChannel", msg);
         });
     }
 
@@ -315,7 +316,6 @@ function wireBridgeSignals() {
             appendYoutubeChannelLog(msg);
             setYoutubeChannelStatus(msg, false, true);
             setYoutubeChannelLock(false);
-            hideBusyOverlay("youtubeChannel");
             if (pyBridge.getLibraryJson) pyBridge.getLibraryJson();
         });
     }
@@ -325,7 +325,6 @@ function wireBridgeSignals() {
             appendYoutubeChannelLog(msg);
             setYoutubeChannelStatus(msg, true);
             setYoutubeChannelLock(false);
-            hideBusyOverlay("youtubeChannel");
         });
     }
 
