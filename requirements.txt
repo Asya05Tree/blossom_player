@@ -1,6 +1,7 @@
 PyQt6
 PyQt6-WebEngine
 mutagen
+numpy
 yt-dlp
 spotipy
 spotdl

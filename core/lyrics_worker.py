@@ -72,6 +72,53 @@ class LyricsPreviewWorker(QThread):
             })
 
 
+class SingleLyricsSearchWorker(QThread):
+    """Разовый поиск текста для ОДНОЙ конкретной песни из библиотеки — кнопка
+    на карточке песни без текста. В отличие от LyricsPreviewWorker сразу
+    сохраняет найденный результат в БД (и пушит в Drive meta, если залогинены)."""
+
+    finished_ok = pyqtSignal(int, dict)
+    finished_err = pyqtSignal(int, dict)
+
+    def __init__(self, song_id: int, title: str, artist: str, filepath: str = "", drive=None):
+        super().__init__()
+        self.song_id = song_id
+        self.title = title
+        self.artist = artist
+        self.filepath = filepath
+        self.drive = drive
+
+    def run(self):
+        try:
+            result = resolve_lyrics_for_song(self.title, self.artist, self.filepath)
+            if result.get("status") == "error":
+                self.finished_err.emit(self.song_id, {
+                    "stage": "pipeline",
+                    "code": "LYRICS_BLOCKED",
+                    "message": result.get("error") or "Не удалось проверить текст (сетевая блокировка)",
+                })
+                return
+            lyrics = result.get("lyrics") or INSTRUMENTAL_MARK
+            db.update_song_lyrics(self.song_id, lyrics)
+            if self.drive is not None:
+                song = db.get_song(self.song_id)
+                if song:
+                    title = strip_decor(song.title)
+                    artist = strip_decor(song.artist)
+                    try:
+                        push_song_meta(self.drive, song, title, artist, lyrics)
+                    except Exception:
+                        pass
+            self.finished_ok.emit(self.song_id, result)
+        except Exception as exc:
+            self.finished_err.emit(self.song_id, {
+                "stage": "pipeline",
+                "code": "LYRICS_SINGLE_CRASH",
+                "message": "Не удалось найти текст",
+                "detail": str(exc),
+            })
+
+
 class LyricsBulkWorker(QThread):
     """Проходит по всем песням без текста и пытается найти его (или помечает
     как инструментал)."""

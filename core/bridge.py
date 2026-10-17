@@ -15,6 +15,7 @@ from .spotify_library_worker import SpotifyLibraryWorker
 from .youtube_import_worker import YoutubeImportWorker
 from .artist_import_worker import ArtistImportWorker
 from .youtube_channel_worker import YoutubeChannelWorker
+from .tiktok_import_worker import TikTokCollectionWorker, TikTokCandidateDownloadWorker
 from .instrumental_worker import InstrumentalSearchWorker, InstrumentalDownloadWorker
 from .duplicate_finder_worker import DuplicateFinderWorker
 from .blossom_error import BlossomError
@@ -22,8 +23,9 @@ from .trim_util import trim_audio
 from .ocr_worker import OcrWorker
 from .text_search_worker import TextSearchDownloadWorker
 from .shazam_worker import ShazamWorker
-from .lyrics_worker import LyricsPreviewWorker, LyricsBulkWorker, ClearAllLyricsWorker, SyncedLyricsWorker
+from .lyrics_worker import LyricsPreviewWorker, LyricsBulkWorker, ClearAllLyricsWorker, SyncedLyricsWorker, SingleLyricsSearchWorker
 from .online_search_worker import OnlineSearchWorker
+from .spectrum_worker import SpectrumAnalysisWorker
 from .drive_meta_sync import push_song_meta
 from .fingerprint_util import compute_fingerprint, fingerprint_duration, fingerprint_similarity, DEFAULT_DUPLICATE_THRESHOLD
 from typing import Optional
@@ -63,6 +65,12 @@ class BlossomBridge(QObject):
     youtubeChannelProgress = pyqtSignal(str)
     youtubeChannelFinished = pyqtSignal(str)
     youtubeChannelFailed = pyqtSignal(str)
+    tiktokCollectionProgress = pyqtSignal(str)
+    tiktokCollectionFinished = pyqtSignal(str)
+    tiktokCollectionFailed = pyqtSignal(str)
+    tiktokCandidateFound = pyqtSignal(str)
+    tiktokCandidateDownloadReady = pyqtSignal(str)
+    tiktokCandidateDownloadFailed = pyqtSignal(str)
     instrumentalStarted = pyqtSignal(int)
     instrumentalProgress = pyqtSignal(str)
     instrumentalFound = pyqtSignal(str)
@@ -83,6 +91,8 @@ class BlossomBridge(QObject):
     shazamFailed = pyqtSignal(str)
     lyricsPreviewReady = pyqtSignal(str)
     lyricsPreviewFailed = pyqtSignal(str)
+    singleLyricsSearchReady = pyqtSignal(int, str)
+    singleLyricsSearchFailed = pyqtSignal(int, str)
     lyricsBulkStarted = pyqtSignal()
     lyricsBulkProgress = pyqtSignal(str)
     lyricsBulkFinished = pyqtSignal(str)
@@ -90,7 +100,8 @@ class BlossomBridge(QObject):
     syncedLyricsReady = pyqtSignal(int, str)
     onlineSearchReady = pyqtSignal(str)
     onlineSearchFailed = pyqtSignal(str)
-    heavyJobsChanged = pyqtSignal(bool)
+    heavyJobsChanged = pyqtSignal(str)
+    spectrumReady = pyqtSignal(int, str)
 
     def __init__(self, player: BlossomPlayer, drive: BlossomDriveManager):
         super().__init__()
@@ -106,6 +117,8 @@ class BlossomBridge(QObject):
         self._youtube_import_worker = None
         self._artist_import_worker = None
         self._youtube_channel_worker = None
+        self._tiktok_collection_worker = None
+        self._tiktok_candidate_worker = None
         self._instrumental_search_worker = None
         self._instrumental_download_worker = None
         self._duplicate_finder_worker = None
@@ -113,11 +126,14 @@ class BlossomBridge(QObject):
         self._text_search_worker = None
         self._shazam_worker = None
         self._lyrics_preview_worker = None
+        self._single_lyrics_worker = None
         self._lyrics_bulk_worker = None
         self._clear_all_lyrics_worker = None
         self._synced_lyrics_worker = None
         self._synced_lyrics_tried_song_id = None
         self._online_search_worker = None
+        self._spectrum_worker = None
+        self._spectrum_tried_song_id = None
         db.init_db()
         self.player.player.positionChanged.connect(self._on_position_changed)
         self.player.player.durationChanged.connect(self._on_duration_changed)
@@ -129,7 +145,8 @@ class BlossomBridge(QObject):
         # параллельное переключение песен во время таких операций уже роняло
         # приложение. Опрос таймером, а не хук на каждый старт воркера —
         # не нужно трогать десяток разных мест, где воркеры запускаются.
-        self._heavy_jobs_active = False
+        self._heavy_jobs_payload = "[]"
+        self._heavy_job_detail = {}
         self._heavy_lock_timer = QTimer(self)
         self._heavy_lock_timer.setInterval(400)
         self._heavy_lock_timer.timeout.connect(self._check_heavy_jobs)
@@ -138,33 +155,70 @@ class BlossomBridge(QObject):
     _JOB_WORKER_ATTRS = (
         "_drive_verify_worker", "_drive_login_worker", "_sync_worker", "_drive_upload_worker",
         "_import_worker", "_youtube_import_worker", "_artist_import_worker", "_youtube_channel_worker",
+        "_tiktok_collection_worker", "_tiktok_candidate_worker",
         "_instrumental_search_worker", "_instrumental_download_worker", "_ocr_worker",
         "_text_search_worker", "_shazam_worker", "_duplicate_finder_worker", "_spotify_library_worker",
-        "_lyrics_preview_worker", "_lyrics_bulk_worker", "_clear_all_lyrics_worker",
-        "_synced_lyrics_worker", "_online_search_worker",
+        "_lyrics_preview_worker", "_single_lyrics_worker", "_lyrics_bulk_worker", "_clear_all_lyrics_worker",
+        "_synced_lyrics_worker", "_online_search_worker", "_spectrum_worker",
     )
 
     # Подмножество _JOB_WORKER_ATTRS, которое блокирует клики по библиотеке —
     # только "работа с текстами песен или загрузка" в точном смысле просьбы
-    # пользователя. Лёгкие фоновые штуки (авто-поиск караоке-текста, OCR,
-    # поиск дублей — у них своя модалка со Stop) сюда не входят, иначе
+    # пользователя. Лёгкие фоновые штуки (авто-поиск караоке-текста/спектра,
+    # OCR, поиск дублей — у них своя модалка со Stop) сюда не входят, иначе
     # библиотека блокировалась бы почти постоянно без всякой пользы.
-    _HEAVY_LOCK_WORKER_ATTRS = (
-        "_lyrics_bulk_worker", "_clear_all_lyrics_worker",
-        "_import_worker", "_youtube_import_worker", "_artist_import_worker",
-        "_youtube_channel_worker", "_spotify_library_worker",
-        "_instrumental_download_worker", "_text_search_worker", "_shazam_worker",
-        "_sync_worker", "_drive_upload_worker",
-    )
+    # label — что показать пользователю; stoppable=True только если у воркера
+    # есть request_stop() и его правда можно прервать без риска оставить
+    # недоделанную/повреждённую запись.
+    _HEAVY_LOCK_JOBS = {
+        "lyricsBulk": ("_lyrics_bulk_worker", "Поиск текстов песен", True),
+        "clearAllLyrics": ("_clear_all_lyrics_worker", "Удаление текстов у всех песен", True),
+        "spotifyImport": ("_import_worker", "Скачивание трека со Spotify", False),
+        "youtubeImport": ("_youtube_import_worker", "Скачивание трека с YouTube", False),
+        "artistImport": ("_artist_import_worker", "Скачивание дискографии артиста", True),
+        "youtubeChannel": ("_youtube_channel_worker", "Скачивание канала YouTube", True),
+        "tiktokCollection": ("_tiktok_collection_worker", "Распознавание песен в коллекции TikTok", True),
+        "tiktokCandidateDownload": ("_tiktok_candidate_worker", "Скачивание выбранного трека из TikTok", False),
+        "spotifyLibrary": ("_spotify_library_worker", "Спотифай автоматически", True),
+        "instrumentalDownload": ("_instrumental_download_worker", "Скачивание инструментала", False),
+        "textSearch": ("_text_search_worker", "Скачивание найденного трека", False),
+        "shazam": ("_shazam_worker", "Распознавание Shazam", False),
+        "driveSync": ("_sync_worker", "Синхронизация с Google Drive", True),
+        "driveUpload": ("_drive_upload_worker", "Загрузка в Google Drive", False),
+    }
 
     def _check_heavy_jobs(self):
-        active = any(
-            getattr(self, name, None) is not None and getattr(self, name).isRunning()
-            for name in self._HEAVY_LOCK_WORKER_ATTRS
-        )
-        if active != self._heavy_jobs_active:
-            self._heavy_jobs_active = active
-            self.heavyJobsChanged.emit(active)
+        active = []
+        for key, (attr_name, label, stoppable) in self._HEAVY_LOCK_JOBS.items():
+            worker = getattr(self, attr_name, None)
+            if worker is not None and worker.isRunning():
+                active.append({
+                    "key": key,
+                    "label": label,
+                    "stoppable": stoppable,
+                    "detail": self._heavy_job_detail.get(key, ""),
+                })
+            else:
+                self._heavy_job_detail.pop(key, None)
+        payload = json.dumps(active, ensure_ascii=False)
+        if payload != self._heavy_jobs_payload:
+            self._heavy_jobs_payload = payload
+            self.heavyJobsChanged.emit(payload)
+
+    def _set_heavy_job_detail(self, key: str, detail: str) -> None:
+        self._heavy_job_detail[key] = detail
+
+    @pyqtSlot(str)
+    def stopHeavyJob(self, key):
+        entry = self._HEAVY_LOCK_JOBS.get(key)
+        if not entry:
+            return
+        attr_name, _label, stoppable = entry
+        if not stoppable:
+            return
+        worker = getattr(self, attr_name, None)
+        if worker is not None and worker.isRunning() and hasattr(worker, "request_stop"):
+            worker.request_stop()
 
     def _active_jobs(self) -> list:
         workers = []
@@ -237,6 +291,7 @@ class BlossomBridge(QObject):
                 "filepath": song.filepath,
                 "added_at": song.added_at or 0,
                 "playlists": playlist_names.get(song.id, []),
+                "has_lyrics": bool(song.lyrics and song.lyrics.strip() and song.lyrics.strip() != DEFAULT_LYRICS),
             })
         self.libraryUpdated.emit(json.dumps(items, ensure_ascii=False))
 
@@ -317,8 +372,27 @@ class BlossomBridge(QObject):
             self._synced_lyrics_worker.finished_err.connect(lambda sid, msg: None)
             self._synced_lyrics_worker.start()
 
+        # Спектр считается через ffmpeg+FFT и кэшируется на диске по пути к
+        # файлу (core/audio_spectrum.py) — гонять воркер при каждом повторном
+        # включении той же песни не накладно (второй раз просто читает кэш),
+        # но свой "уже пробовали" флаг всё равно нужен, чтобы не запускать
+        # второй воркер на ту же песню, пока первый ещё не закончил.
+        if (
+            song.filepath
+            and self._spectrum_tried_song_id != song.id
+            and not (self._spectrum_worker and self._spectrum_worker.isRunning())
+        ):
+            self._spectrum_tried_song_id = song.id
+            self._spectrum_worker = SpectrumAnalysisWorker(song.id, song.filepath)
+            self._spectrum_worker.finished_ok.connect(self._on_spectrum_ok)
+            self._spectrum_worker.finished_err.connect(lambda sid, msg: None)
+            self._spectrum_worker.start()
+
     def _on_synced_lyrics_ok(self, song_id: int, lrc: str):
         self.syncedLyricsReady.emit(song_id, lrc)
+
+    def _on_spectrum_ok(self, song_id: int, payload: str):
+        self.spectrumReady.emit(song_id, payload)
 
     @pyqtSlot(result=str)
     def getDriveStatus(self) -> str:
@@ -625,6 +699,7 @@ class BlossomBridge(QObject):
             self.toastMessage.emit("Сначала войди в Google Drive", True)
             return
         self._sync_worker = DriveSyncWorker(self.drive)
+        self._sync_worker.progress.connect(lambda msg: self._set_heavy_job_detail("driveSync", msg))
         self._sync_worker.finished_ok.connect(self._on_sync_ok)
         self._sync_worker.finished_err.connect(
             lambda e: self.toastMessage.emit(f"Ошибка синхронизации: {e}", True)
@@ -989,6 +1064,85 @@ class BlossomBridge(QObject):
             text += f" — {detail[:300]}"
         self.youtubeChannelFailed.emit(text)
 
+    @pyqtSlot(str)
+    def importTikTokCollection(self, url):
+        if self._tiktok_collection_worker and self._tiktok_collection_worker.isRunning():
+            self.tiktokCollectionFailed.emit("Загрузка коллекции TikTok уже выполняется")
+            return
+        self.player.stop()
+        self._tiktok_collection_worker = TikTokCollectionWorker(
+            url=url,
+            drive=self.drive,
+            upload_to_drive=bool(self.drive.service),
+        )
+        self._tiktok_collection_worker.progress.connect(self._on_tiktok_collection_progress)
+        self._tiktok_collection_worker.candidate_found.connect(self._on_tiktok_candidate_found)
+        self._tiktok_collection_worker.finished_ok.connect(self._on_tiktok_collection_ok)
+        self._tiktok_collection_worker.finished_err.connect(self._on_tiktok_collection_err)
+        self._tiktok_collection_worker.start()
+
+    def _on_tiktok_collection_progress(self, msg: str) -> None:
+        self.tiktokCollectionProgress.emit(msg)
+        self._set_heavy_job_detail("tiktokCollection", msg)
+
+    def _on_tiktok_candidate_found(self, payload: dict) -> None:
+        self.tiktokCandidateFound.emit(json.dumps(payload, ensure_ascii=False))
+
+    @pyqtSlot()
+    def stopTikTokCollection(self):
+        if self._tiktok_collection_worker and self._tiktok_collection_worker.isRunning():
+            self._tiktok_collection_worker.request_stop()
+            self.tiktokCollectionProgress.emit("Останавливаю после текущего видео…")
+
+    def _on_tiktok_collection_ok(self, stats: dict):
+        text = (
+            f"Найдено кандидатов для скачивания: {stats.get('identified', 0)} — выбери в списке ниже. "
+            f"Пропущено длинных {stats.get('skipped', 0)}, ошибок {stats.get('failed', 0)} "
+            f"из {stats.get('total', 0)} видео"
+        )
+        if stats.get("stopped"):
+            text = "Остановлено. " + text
+        self.tiktokCollectionFinished.emit(text)
+
+    def _on_tiktok_collection_err(self, err: dict):
+        stage = err.get("stage", "pipeline")
+        code = err.get("code", "UNKNOWN")
+        message = err.get("message", "Ошибка загрузки коллекции TikTok")
+        detail = (err.get("detail") or "").strip()
+        text = f"[{stage}:{code}] {message}"
+        if detail:
+            text += f" — {detail[:300]}"
+        self.tiktokCollectionFailed.emit(text)
+
+    @pyqtSlot(str, int, bool)
+    def downloadTikTokCandidate(self, url, playlist_id, upload_to_drive):
+        if self._tiktok_candidate_worker and self._tiktok_candidate_worker.isRunning():
+            self.tiktokCandidateDownloadFailed.emit("Скачивание уже выполняется — подожди")
+            return
+        self._tiktok_candidate_worker = TikTokCandidateDownloadWorker(
+            url=url,
+            drive=self.drive,
+            playlist_id=playlist_id,
+            upload_to_drive=bool(upload_to_drive),
+        )
+        self._tiktok_candidate_worker.finished_ok.connect(self._on_tiktok_candidate_download_ok)
+        self._tiktok_candidate_worker.finished_err.connect(self._on_tiktok_candidate_download_err)
+        self._tiktok_candidate_worker.start()
+
+    def _on_tiktok_candidate_download_ok(self, result: dict):
+        self._reload_queue_keep()
+        self._update_ui_state()
+        self._emit_library()
+        self._emit_playlists()
+        title = result.get("title_display") or result.get("title") or "track"
+        if result.get("duplicate"):
+            title = f"{title} (уже была в библиотеке)"
+        self.tiktokCandidateDownloadReady.emit(title)
+
+    def _on_tiktok_candidate_download_err(self, err: dict):
+        message = err.get("message", "Не удалось скачать трек")
+        self.tiktokCandidateDownloadFailed.emit(message)
+
     @pyqtSlot(int)
     def findInstrumental(self, song_id):
         """Только ищет инструментал на YouTube — ничего не скачивает.
@@ -1180,6 +1334,39 @@ class BlossomBridge(QObject):
 
     def _on_lyrics_preview_err(self, err):
         self.lyricsPreviewFailed.emit(err.get("message", "Не удалось найти текст"))
+
+    @pyqtSlot(int)
+    def searchLyricsForSong(self, song_id):
+        """Поиск текста для ОДНОЙ конкретной песни из библиотеки — кнопка на
+        карточке песни без текста, в отличие от searchLyricsPreview сразу
+        сохраняет результат в БД."""
+        if self._single_lyrics_worker and self._single_lyrics_worker.isRunning():
+            self.singleLyricsSearchFailed.emit(song_id, "Поиск текста уже выполняется")
+            return
+        song = db.get_song(song_id)
+        if not song:
+            return
+        self._single_lyrics_worker = SingleLyricsSearchWorker(
+            song_id=song_id,
+            title=song.title,
+            artist=song.artist,
+            filepath=song.filepath or "",
+            drive=self.drive,
+        )
+        self._single_lyrics_worker.finished_ok.connect(self._on_single_lyrics_ok)
+        self._single_lyrics_worker.finished_err.connect(self._on_single_lyrics_err)
+        self._single_lyrics_worker.start()
+
+    def _on_single_lyrics_ok(self, song_id: int, result: dict):
+        self._emit_library()
+        current = self.player.get_current_song()
+        if current and current.id == song_id:
+            self._update_ui_state()
+        msg = "Похоже, это инструментал — слов нет" if result.get("status") == "instrumental" else "Текст найден"
+        self.singleLyricsSearchReady.emit(song_id, msg)
+
+    def _on_single_lyrics_err(self, song_id: int, err: dict):
+        self.singleLyricsSearchFailed.emit(song_id, err.get("message", "Не удалось найти текст"))
 
     def _any_lyrics_bulk_job_running(self) -> bool:
         return bool(

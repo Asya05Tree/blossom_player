@@ -68,7 +68,10 @@
     
     <div class="main-panel">
         <div class="now-playing-card">
-            <img id="cover" class="cover-art" src="default_cover.png" alt="Cover">
+            <div class="cover-wrap">
+                <canvas id="cover-visualizer" class="cover-visualizer" width="340" height="340"></canvas>
+                <img id="cover" class="cover-art" src="default_cover.png" alt="Cover">
+            </div>
             <h1 id="title" class="song-title">Выбери трек</h1>
             <p id="artist" class="song-artist">Включите песню</p>
             
@@ -129,11 +132,14 @@
         <button type="button" onclick="openYoutubeModal()">YouTube по ссылке</button>
         <button type="button" onclick="openArtistModal()">Дискография артиста</button>
         <button type="button" onclick="openYoutubeChannelModal()">Канал YouTube целиком</button>
+        <button type="button" onclick="openTikTokCollectionModal()">Коллекция видео TikTok</button>
         <button type="button" onclick="openOcrModal()">Распознать с картинки</button>
         <button type="button" onclick="openShazamModal()">Shazam: узнать трек</button>
         </div>
     </div>
     <div id="toast" class="toast hidden"></div>
+
+    <div id="heavy-jobs-banner" class="heavy-jobs-banner hidden"></div>
 
     <div id="busy-overlay" class="busy-overlay hidden">
         <div class="busy-spinner"></div>
@@ -247,6 +253,27 @@
                 <button type="button" id="btn-youtube-channel-start" class="btn-modal btn-primary" onclick="startYoutubeChannelImport()">Скачать всё</button>
                 <button type="button" id="btn-youtube-channel-stop" class="btn-modal btn-ghost" onclick="stopYoutubeChannelImport()" disabled>Остановить</button>
                 <button type="button" class="btn-modal btn-ghost" onclick="closeYoutubeChannelModal()">Скрыть</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="tiktok-collection-modal" class="modal-overlay" style="display: none;">
+        <div class="modal-card modal-card-wide">
+            <h3 class="modal-title">Коллекция видео TikTok</h3>
+            <p style="font-size:12px;color:#9a86a4;margin:0">
+                Вставь ссылку на профиль/коллекцию видео TikTok. Каждое видео (до 5 минут)
+                прослушивается Shazam'ом — найденные песни появятся ниже списком, где можно
+                прослушать перед скачиванием и скачать только нужные. Видео дольше 5 минут
+                пропускаются — это не песни, а компиляции/стримы.
+            </p>
+            <input type="text" id="tiktok-collection-url" class="cozy-input" placeholder="Ссылка на профиль или коллекцию TikTok">
+            <div id="tiktok-collection-log" class="spotify-auto-log"></div>
+            <p id="tiktok-collection-status" class="import-status"></p>
+            <div id="tiktok-collection-candidates" class="online-search-results"></div>
+            <div class="modal-actions">
+                <button type="button" id="btn-tiktok-collection-start" class="btn-modal btn-primary" onclick="startTikTokCollectionImport()">Сканировать</button>
+                <button type="button" id="btn-tiktok-collection-stop" class="btn-modal btn-ghost" onclick="stopTikTokCollectionImport()" disabled>Остановить</button>
+                <button type="button" class="btn-modal btn-ghost" onclick="closeTikTokCollectionModal()">Скрыть</button>
             </div>
         </div>
     </div>

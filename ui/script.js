@@ -8,6 +8,7 @@ const ICONS = {
     music: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>',
     scissors: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><line x1="20" y1="4" x2="8.12" y2="15.88"/><line x1="14.47" y1="14.48" x2="20" y2="20"/><line x1="8.12" y1="8.12" x2="12" y2="12"/></svg>',
     playlistAdd: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h12"/><path d="M3 12h9"/><path d="M3 18h6"/><path d="M15 17h6"/><path d="M18 14v6"/></svg>',
+    lyricsSearch: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>',
 };
 
 let pyBridge = null;
@@ -89,6 +90,7 @@ function wireBridgeSignals() {
         setPlaybackControlsEnabled(hasSong);
         setLyricsPanelAvailable(!!has_lyrics);
         setKaraokeLyrics(synced_lyrics || "");
+        setSpectrumFrames(null);
         if (!hasSong) {
             isPlaying = false;
             setPlayIcon(false);
@@ -102,6 +104,15 @@ function wireBridgeSignals() {
         currentPlayingSongId = songId || null;
         refreshActivePlaylistHighlight();
     });
+
+    if (pyBridge.spectrumReady) {
+        pyBridge.spectrumReady.connect(function(songId, json) {
+            if (songId !== currentPlayingSongId) return;
+            var data = {};
+            try { data = typeof json === "string" ? JSON.parse(json) : json; } catch (e) {}
+            setSpectrumFrames(data);
+        });
+    }
 
     if (pyBridge.syncedLyricsReady) {
         pyBridge.syncedLyricsReady.connect(function(songId, lrc) {
@@ -328,6 +339,50 @@ function wireBridgeSignals() {
         });
     }
 
+    if (pyBridge.tiktokCollectionProgress) {
+        pyBridge.tiktokCollectionProgress.connect(function(msg) {
+            appendTikTokCollectionLog(msg);
+            setTikTokCollectionStatus(msg, false);
+        });
+    }
+
+    if (pyBridge.tiktokCollectionFinished) {
+        pyBridge.tiktokCollectionFinished.connect(function(msg) {
+            appendTikTokCollectionLog(msg);
+            setTikTokCollectionStatus(msg, false, true);
+            setTikTokCollectionLock(false);
+            if (pyBridge.getLibraryJson) pyBridge.getLibraryJson();
+        });
+    }
+
+    if (pyBridge.tiktokCollectionFailed) {
+        pyBridge.tiktokCollectionFailed.connect(function(msg) {
+            appendTikTokCollectionLog(msg);
+            setTikTokCollectionStatus(msg, true);
+            setTikTokCollectionLock(false);
+        });
+    }
+
+    if (pyBridge.tiktokCandidateFound) {
+        pyBridge.tiktokCandidateFound.connect(function(json) {
+            var data = {};
+            try { data = typeof json === "string" ? JSON.parse(json) : json; } catch (e) {}
+            if (data && data.title) _appendTikTokCandidate(data);
+        });
+    }
+
+    if (pyBridge.tiktokCandidateDownloadReady) {
+        pyBridge.tiktokCandidateDownloadReady.connect(function(title) {
+            showToast("Скачано: " + title, false);
+        });
+    }
+
+    if (pyBridge.tiktokCandidateDownloadFailed) {
+        pyBridge.tiktokCandidateDownloadFailed.connect(function(msg) {
+            showToast(msg, true);
+        });
+    }
+
     if (pyBridge.instrumentalStarted) {
         pyBridge.instrumentalStarted.connect(function() {
             showToast("Ищу инструментал на YouTube…", false);
@@ -474,6 +529,20 @@ function wireBridgeSignals() {
         });
     }
 
+    if (pyBridge.singleLyricsSearchReady) {
+        pyBridge.singleLyricsSearchReady.connect(function(songId, msg) {
+            showToast(msg, false);
+        });
+    }
+
+    if (pyBridge.singleLyricsSearchFailed) {
+        pyBridge.singleLyricsSearchFailed.connect(function(songId, msg) {
+            showToast(msg, true);
+            var btn = document.querySelector("[data-find-lyrics='" + songId + "']");
+            if (btn) btn.disabled = false;
+        });
+    }
+
     if (pyBridge.songForEditReady) {
         pyBridge.songForEditReady.connect(function(json) {
             _populateEditModal(json);
@@ -481,8 +550,10 @@ function wireBridgeSignals() {
     }
 
     if (pyBridge.heavyJobsChanged) {
-        pyBridge.heavyJobsChanged.connect(function(active) {
-            setGlobalUiLock(active);
+        pyBridge.heavyJobsChanged.connect(function(json) {
+            var jobs = [];
+            try { jobs = typeof json === "string" ? JSON.parse(json) : json; } catch (e) {}
+            setGlobalUiLock(jobs || []);
         });
     }
 
@@ -693,20 +764,32 @@ function renderLibrary(json) {
         return;
     }
     const searchEl = document.getElementById("library-search");
-    const query = searchEl ? searchEl.value.trim().toLowerCase() : "";
-    var matched = librarySongs;
+    const query = searchEl ? searchEl.value.trim() : "";
+    var sortedSongs;
     if (query) {
-        matched = librarySongs.filter(function(s) {
-            var title = (s.title_raw || s.title || "").toLowerCase();
-            var artist = (s.artist_raw || s.artist || "").toLowerCase();
-            return title.indexOf(query) !== -1 || artist.indexOf(query) !== -1;
-        });
+        // Поиск триграммами — переживает опечатки, неполные слова, другой
+        // порядок слов, не только точное вхождение подстроки.
+        sortedSongs = librarySongs
+            .map(function(s) {
+                var title = s.title_raw || s.title || "";
+                var artist = s.artist_raw || s.artist || "";
+                var score = Math.max(
+                    trigramSimilarity(query, title),
+                    trigramSimilarity(query, artist),
+                    trigramSimilarity(query, title + " " + artist)
+                );
+                return { song: s, score: score };
+            })
+            .filter(function(e) { return e.score >= 0.08; })
+            .sort(function(a, b) { return b.score - a.score; })
+            .map(function(e) { return e.song; });
+    } else {
+        sortedSongs = sortLibrarySongs(librarySongs, getLibrarySortMode());
     }
-    if (!matched.length) {
+    if (!sortedSongs.length) {
         list.innerHTML = "<p style='font-size:12px;color:#9a86a4;padding:8px'>Ничего не найдено</p>";
         return;
     }
-    const sortedSongs = sortLibrarySongs(matched, getLibrarySortMode());
     sortedSongs.forEach(function(s) {
         const row = document.createElement("div");
         row.className = "song-item song-row-clickable";
@@ -723,6 +806,8 @@ function renderLibrary(json) {
             "<button type='button' class='icon-btn' data-playlist='" + s.id + "' title='Добавить в плейлист'>" + ICONS.playlistAdd + "</button>" +
             "<button type='button' class='icon-btn' data-edit='" + s.id + "' title='Изменить название, автора, обложку, текст'>" + ICONS.edit + "</button>" +
             "<button type='button' class='icon-btn' data-instr='" + s.id + "' title='Найти инструментал на YouTube'>" + ICONS.music + "</button>" +
+            (!s.has_lyrics ?
+                "<button type='button' class='icon-btn' data-find-lyrics='" + s.id + "' title='Найти текст песни'>" + ICONS.lyricsSearch + "</button>" : "") +
             "<button type='button' class='icon-btn' data-trim='" + s.id + "' title='Обрезать начало/конец'>" + ICONS.scissors + "</button>" +
             "<button type='button' class='icon-btn icon-btn-danger' data-del='" + s.id + "' title='Удалить трек'>" + ICONS.trash + "</button>" +
             "</div>";
@@ -754,9 +839,41 @@ function renderLibrary(json) {
             pyBridge.findInstrumental(parseInt(btn.getAttribute("data-instr")));
         };
     });
+    list.querySelectorAll("[data-find-lyrics]").forEach(function(btn) {
+        btn.onclick = function(e) {
+            e.stopPropagation();
+            if (!pyBridge || !pyBridge.searchLyricsForSong) return;
+            btn.disabled = true;
+            pyBridge.searchLyricsForSong(parseInt(btn.getAttribute("data-find-lyrics")));
+        };
+    });
     list.querySelectorAll("[data-trim]").forEach(function(btn) {
         btn.onclick = function(e) { e.stopPropagation(); openTrimModal(parseInt(btn.getAttribute("data-trim"))); };
     });
+}
+
+/* === Триграммы: нечёткий поиск (опечатки, неполные слова, другой порядок) ===
+   Строка бьётся на все тройки подряд идущих символов (с отступами по краям,
+   чтобы короткие слова и начало/конец строки тоже участвовали), совпадение
+   считается коэффициентом Жаккара по множествам триграмм — тот же принцип,
+   что в pg_trgm у PostgreSQL. */
+function _trigramSet(s) {
+    s = "  " + (s || "").toLowerCase().trim() + "  ";
+    var set = {};
+    for (var i = 0; i < s.length - 2; i++) {
+        set[s.substr(i, 3)] = true;
+    }
+    return set;
+}
+
+function trigramSimilarity(a, b) {
+    var ta = _trigramSet(a), tb = _trigramSet(b);
+    var keysA = Object.keys(ta), keysB = Object.keys(tb);
+    if (!keysA.length || !keysB.length) return 0;
+    var common = 0;
+    keysA.forEach(function(k) { if (tb[k]) common++; });
+    var union = keysA.length + keysB.length - common;
+    return union > 0 ? common / union : 0;
 }
 
 function escapeHtml(t) {
@@ -949,13 +1066,43 @@ function setImportStatus(text, isError, isOk) {
 
 var _globalUiLocked = false;
 
-function setGlobalUiLock(locked) {
-    if (locked === _globalUiLocked) return;
-    _globalUiLocked = locked;
-    document.body.classList.toggle("ui-locked", locked);
-    if (locked) {
-        showToast("Библиотека временно заблокирована — идёт загрузка или работа с текстами песен", false);
+function setGlobalUiLock(jobs) {
+    var locked = !!(jobs && jobs.length);
+    if (locked !== _globalUiLocked) {
+        _globalUiLocked = locked;
+        document.body.classList.toggle("ui-locked", locked);
     }
+    _renderHeavyJobsBanner(jobs || []);
+}
+
+function _renderHeavyJobsBanner(jobs) {
+    var banner = document.getElementById("heavy-jobs-banner");
+    if (!banner) return;
+    if (!jobs.length) {
+        banner.classList.add("hidden");
+        banner.innerHTML = "";
+        return;
+    }
+    banner.classList.remove("hidden");
+    banner.innerHTML = "<div class='heavy-jobs-title'>Библиотека заблокирована — выполняется:</div>" +
+        jobs.map(function(job) {
+            return "<div class='heavy-job-row'>" +
+                "<div class='heavy-job-info'>" +
+                "<span>" + escapeHtml(job.label) + "</span>" +
+                (job.detail ? "<span class='heavy-job-detail'>" + escapeHtml(job.detail) + "</span>" : "") +
+                "</div>" +
+                (job.stoppable
+                    ? "<button type='button' class='btn-modal btn-ghost' data-stop-job='" + escapeHtml(job.key) + "'>Отменить</button>"
+                    : "<span class='heavy-job-wait'>нельзя прервать — подожди</span>") +
+                "</div>";
+        }).join("");
+    banner.querySelectorAll("[data-stop-job]").forEach(function(btn) {
+        btn.onclick = function() {
+            if (pyBridge && pyBridge.stopHeavyJob) pyBridge.stopHeavyJob(btn.getAttribute("data-stop-job"));
+            btn.disabled = true;
+            btn.innerText = "Останавливаю…";
+        };
+    });
 }
 
 function setPlaybackControlsEnabled(enabled) {
@@ -1408,6 +1555,8 @@ function openOnlineSearchModal() {
 
 function closeOnlineSearchModal() {
     document.getElementById("online-search-modal").style.display = "none";
+    // Удаляем iframe с превью, чтобы звук не продолжал играть в закрытой модалке.
+    document.getElementById("online-search-results").innerHTML = "";
 }
 
 function runOnlineSearch() {
@@ -1426,17 +1575,29 @@ function formatDuration(seconds) {
     return m + ":" + (s < 10 ? "0" : "") + s;
 }
 
+function _rankByTrigram(items, query, textFn) {
+    return items
+        .map(function(item) { return { item: item, score: trigramSimilarity(query, textFn(item)) }; })
+        .sort(function(a, b) { return b.score - a.score; })
+        .map(function(e) { return e.item; });
+}
+
 function _renderOnlineSearchResults(data) {
     var box = document.getElementById("online-search-results");
     document.getElementById("online-search-status").innerText = "";
     box.innerHTML = "";
-    var youtube = data.youtube || [];
-    var spotify = data.spotify || [];
+    var queryEl = document.getElementById("online-search-query");
+    var query = queryEl ? queryEl.value.trim() : "";
+    // YouTube/Spotify уже отдают релевантные результаты — ничего не прячем,
+    // просто переупорядочиваем триграммами, чтобы самое похожее на запрос
+    // (с учётом опечаток/порядка слов) было сверху, а не как решил их поиск.
+    var youtube = _rankByTrigram(data.youtube || [], query, function(i) { return i.title || ""; });
+    var spotify = _rankByTrigram(data.spotify || [], query, function(i) { return (i.artist || "") + " " + (i.title || ""); });
     if (!youtube.length && !spotify.length) {
         box.innerHTML = "<p style='font-size:12px;color:#9a86a4'>Ничего не найдено</p>";
         return;
     }
-    function section(title, items, onImport, subFn) {
+    function section(title, items, onImport, subFn, previewUrlFn) {
         if (!items.length) return;
         var h = document.createElement("div");
         h.className = "online-search-group-title";
@@ -1446,10 +1607,17 @@ function _renderOnlineSearchResults(data) {
             var row = document.createElement("div");
             row.className = "online-search-row";
             row.innerHTML =
-                "<div><div class='online-search-row-info'>" + escapeHtml(item.title || "") + "</div>" +
+                "<div class='online-search-row-top'>" +
+                "<div class='online-search-row-main'><div class='online-search-row-info'>" + escapeHtml(item.title || "") + "</div>" +
                 "<div class='online-search-row-sub'>" + escapeHtml(subFn(item)) + "</div></div>" +
-                "<button type='button' class='btn-modal btn-secondary'>Добавить</button>";
-            row.querySelector("button").onclick = function() { onImport(item); };
+                "<div class='online-search-row-actions'>" +
+                "<button type='button' class='btn-modal btn-ghost' data-preview>&#9654; Прослушать</button>" +
+                "<button type='button' class='btn-modal btn-secondary' data-add>Скачать</button>" +
+                "</div></div>";
+            row.querySelector("[data-add]").onclick = function() { onImport(item); };
+            row.querySelector("[data-preview]").onclick = function(e) {
+                _toggleOnlineSearchPreview(row, e.currentTarget, previewUrlFn(item));
+            };
             box.appendChild(row);
         });
     }
@@ -1457,12 +1625,36 @@ function _renderOnlineSearchResults(data) {
         pyBridge.importFromYoutube(item.url, "", "", driveLoggedIn);
         closeOnlineSearchModal();
         showToast("Скачиваю: " + item.title, false);
-    }, function(item) { return (item.channel || "") + " · " + formatDuration(item.duration); });
+    }, function(item) { return (item.channel || "") + " · " + formatDuration(item.duration); },
+    function(item) { return "https://www.youtube.com/embed/" + item.id + "?autoplay=1"; });
     section("Spotify", spotify, function(item) {
         pyBridge.importFromSpotify(item.url, "", "", driveLoggedIn);
         closeOnlineSearchModal();
         showToast("Скачиваю: " + item.title, false);
-    }, function(item) { return item.artist || ""; });
+    }, function(item) { return item.artist || ""; },
+    function(item) { return "https://open.spotify.com/embed/track/" + item.id + "?autoplay=1"; });
+}
+
+function _toggleOnlineSearchPreview(row, btn, embedUrl) {
+    var existing = row.querySelector(".online-search-preview-frame");
+    if (existing) {
+        existing.remove();
+        btn.innerHTML = "&#9654; Прослушать";
+        return;
+    }
+    // Закрываем другие открытые превью — чтобы не играло несколько сразу
+    document.querySelectorAll(".online-search-preview-frame").forEach(function(f) {
+        var ownerBtn = f.parentElement && f.parentElement.querySelector("[data-preview]");
+        f.remove();
+        if (ownerBtn) ownerBtn.innerHTML = "&#9654; Прослушать";
+    });
+    var frame = document.createElement("iframe");
+    frame.className = "online-search-preview-frame";
+    frame.src = embedUrl;
+    frame.allow = "autoplay; encrypted-media";
+    frame.style.height = embedUrl.indexOf("spotify.com") !== -1 ? "80px" : "190px";
+    row.appendChild(frame);
+    btn.innerHTML = "&#9632; Стоп";
 }
 
 /* === YouTube channel/playlist bulk import === */
@@ -1521,6 +1713,102 @@ function appendYoutubeChannelLog(msg) {
 
 function setYoutubeChannelStatus(text, isError, isOk) {
     var el = document.getElementById("youtube-channel-status");
+    if (!el) return;
+    el.innerText = text || "";
+    el.className = "import-status" + (isError ? " error" : isOk ? " ok" : "");
+}
+
+/* === TikTok collection bulk import (Shazam recognition per video) === */
+
+var tiktokCollectionRunning = false;
+
+function openTikTokCollectionModal() {
+    document.getElementById("add-menu").classList.add("hidden");
+    document.getElementById("tiktok-collection-url").value = "";
+    document.getElementById("tiktok-collection-modal").style.display = "flex";
+    if (!tiktokCollectionRunning) {
+        document.getElementById("tiktok-collection-log").innerText = "";
+        document.getElementById("tiktok-collection-candidates").innerHTML = "";
+        setTikTokCollectionStatus("");
+    }
+}
+
+function closeTikTokCollectionModal() {
+    document.getElementById("tiktok-collection-modal").style.display = "none";
+}
+
+function startTikTokCollectionImport() {
+    if (!pyBridge || !pyBridge.importTikTokCollection) return;
+    if (tiktokCollectionRunning) return;
+    const url = document.getElementById("tiktok-collection-url").value.trim();
+    if (!url) {
+        setTikTokCollectionStatus("Нужна ссылка на коллекцию/профиль TikTok", true);
+        return;
+    }
+    document.getElementById("tiktok-collection-log").innerText = "";
+    document.getElementById("tiktok-collection-candidates").innerHTML = "";
+    appendTikTokCollectionLog("Читаю список видео…");
+    setTikTokCollectionLock(true);
+    pyBridge.importTikTokCollection(url);
+}
+
+function _appendTikTokCandidate(payload) {
+    var box = document.getElementById("tiktok-collection-candidates");
+    if (!box) return;
+    var wrapper = document.createElement("div");
+    var header = document.createElement("div");
+    header.className = "online-search-group-title";
+    header.innerText = "Из видео «" + payload.video_label + "»: распознано " + payload.artist + " — " + payload.title;
+    wrapper.appendChild(header);
+    (payload.results || []).forEach(function(item) {
+        var row = document.createElement("div");
+        row.className = "online-search-row";
+        row.innerHTML =
+            "<div class='online-search-row-top'>" +
+            "<div class='online-search-row-main'><div class='online-search-row-info'>" + escapeHtml(item.title || "") + "</div>" +
+            "<div class='online-search-row-sub'>" + escapeHtml((item.channel || "") + " · " + formatDuration(item.duration)) + "</div></div>" +
+            "<div class='online-search-row-actions'>" +
+            "<button type='button' class='btn-modal btn-ghost' data-preview>&#9654; Прослушать</button>" +
+            "<button type='button' class='btn-modal btn-secondary' data-add>Скачать</button>" +
+            "</div></div>";
+        row.querySelector("[data-preview]").onclick = function(e) {
+            _toggleOnlineSearchPreview(row, e.currentTarget, "https://www.youtube.com/embed/" + item.id + "?autoplay=1");
+        };
+        row.querySelector("[data-add]").onclick = function() {
+            if (!pyBridge || !pyBridge.downloadTikTokCandidate) return;
+            pyBridge.downloadTikTokCandidate(item.url, payload.playlist_id || 0, driveLoggedIn);
+            // Остальные варианты для этой же песни больше не нужны — трек уже скачивается.
+            wrapper.remove();
+        };
+        wrapper.appendChild(row);
+    });
+    box.appendChild(wrapper);
+}
+
+function stopTikTokCollectionImport() {
+    if (pyBridge && pyBridge.stopTikTokCollection) pyBridge.stopTikTokCollection();
+}
+
+function setTikTokCollectionLock(locked) {
+    tiktokCollectionRunning = locked;
+    var startBtn = document.getElementById("btn-tiktok-collection-start");
+    var stopBtn = document.getElementById("btn-tiktok-collection-stop");
+    if (startBtn) startBtn.disabled = locked;
+    if (stopBtn) stopBtn.disabled = !locked;
+}
+
+function appendTikTokCollectionLog(msg) {
+    var log = document.getElementById("tiktok-collection-log");
+    if (!log || !msg) return;
+    var line = document.createElement("div");
+    line.innerText = msg;
+    log.appendChild(line);
+    while (log.childNodes.length > 300) log.removeChild(log.firstChild);
+    log.scrollTop = log.scrollHeight;
+}
+
+function setTikTokCollectionStatus(text, isError, isOk) {
+    var el = document.getElementById("tiktok-collection-status");
     if (!el) return;
     el.innerText = text || "";
     el.className = "import-status" + (isError ? " error" : isOk ? " ok" : "");
@@ -2192,6 +2480,77 @@ function updateProgressBar(pos, dur) {
     if (cur) cur.innerText = formatTime(pos);
     if (tot) tot.innerText = formatTime(dur);
     updateKaraokeHighlight(pos);
+    _posAnchorMs = pos;
+    _posAnchorWallClock = performance.now();
+}
+
+/* === Визуализатор аудио-спектра вокруг обложки ===
+   Реальный спектр считается один раз на бэкенде (ffmpeg + FFT, см.
+   core/audio_spectrum.py) и кэшируется — здесь только синхронизация
+   заранее посчитанных кадров с текущей позицией воспроизведения и отрисовка
+   на canvas. positionChanged прилетает не на каждый кадр экрана, поэтому
+   между тиками позиция оценивается через performance.now(). */
+var _spectrumFrames = null;
+var _spectrumFrameMs = 50;
+var _posAnchorMs = 0;
+var _posAnchorWallClock = 0;
+var _vizRunning = false;
+
+function _drawVisualizer(bands) {
+    var canvas = document.getElementById("cover-visualizer");
+    if (!canvas) return;
+    var ctx = canvas.getContext("2d");
+    var w = canvas.width, h = canvas.height;
+    ctx.clearRect(0, 0, w, h);
+    if (!bands || !bands.length) return;
+    var cx = w / 2, cy = h / 2;
+    var innerRadius = 142;
+    var maxBarLength = 55;
+    var n = bands.length;
+    for (var i = 0; i < n; i++) {
+        var angle = (i / n) * Math.PI * 2 - Math.PI / 2;
+        var mag = Math.max(0, Math.min(1, bands[i]));
+        var barLen = 4 + mag * maxBarLength;
+        var cosA = Math.cos(angle), sinA = Math.sin(angle);
+        ctx.strokeStyle = "rgba(184, 79, 160, " + (0.3 + mag * 0.55) + ")";
+        ctx.lineWidth = 4;
+        ctx.lineCap = "round";
+        ctx.beginPath();
+        ctx.moveTo(cx + cosA * innerRadius, cy + sinA * innerRadius);
+        ctx.lineTo(cx + cosA * (innerRadius + barLen), cy + sinA * (innerRadius + barLen));
+        ctx.stroke();
+    }
+}
+
+function _vizLoop() {
+    if (!_spectrumFrames || !_spectrumFrames.length) {
+        _drawVisualizer(null);
+        _vizRunning = false;
+        return;
+    }
+    if (isPlaying) {
+        var estPos = _posAnchorMs + (performance.now() - _posAnchorWallClock);
+        var idx = Math.floor(estPos / _spectrumFrameMs);
+        idx = Math.max(0, Math.min(_spectrumFrames.length - 1, idx));
+        _drawVisualizer(_spectrumFrames[idx]);
+    }
+    requestAnimationFrame(_vizLoop);
+}
+
+function _startVizLoopIfNeeded() {
+    if (_vizRunning) return;
+    _vizRunning = true;
+    requestAnimationFrame(_vizLoop);
+}
+
+function setSpectrumFrames(payload) {
+    _spectrumFrames = (payload && payload.frames) || null;
+    _spectrumFrameMs = (payload && payload.frame_ms) || 50;
+    if (_spectrumFrames && _spectrumFrames.length) {
+        _startVizLoopIfNeeded();
+    } else {
+        _drawVisualizer(null);
+    }
 }
 
 function onSeek(value) {

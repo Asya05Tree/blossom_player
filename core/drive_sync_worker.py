@@ -19,20 +19,30 @@ class DriveSyncWorker(QThread):
     """Syncs library from Google Drive Meta/ folder to local DB."""
     finished_ok = pyqtSignal(int)  # number of synced songs
     finished_err = pyqtSignal(str)
+    progress = pyqtSignal(str)
 
     def __init__(self, drive: BlossomDriveManager):
         super().__init__()
         self.drive = drive
+        self._stop_requested = False
+
+    def request_stop(self):
+        self._stop_requested = True
 
     def run(self):
         try:
+            self.progress.emit("Читаю список файлов в Google Drive…")
             if not self.drive.service:
                 self.drive.login()
 
             meta_files = self.drive.list_files_in_folder("Meta")
+            total = len(meta_files)
             synced = 0
 
-            for mf in meta_files:
+            for done, mf in enumerate(meta_files, start=1):
+                if self._stop_requested:
+                    break
+                self.progress.emit(f"[{done}/{total}] {mf.get('name', '')}")
                 if not mf["name"].endswith(".json"):
                     continue
                 try:
